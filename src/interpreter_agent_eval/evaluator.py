@@ -54,6 +54,12 @@ class EvaluationFramework:
             
         Returns:
             List of conversation exchanges
+            
+        Note:
+            For multi-turn conversations with non-LLM users, each turn will echo
+            the previous translation since non-LLM users cannot generate new responses.
+            For realistic multi-turn testing, use LLM-powered users (is_llm=True) or
+            call run_conversation() multiple times with different initial messages.
         """
         current_user = self.user1 if from_user == 1 else self.user2
         other_user = self.user2 if from_user == 1 else self.user1
