@@ -79,13 +79,17 @@ def compare_providers():
             name=f"Interpreter-{config['name']}"
         )
         
-        # Run evaluation
+        # Run evaluation with list of messages
         framework = EvaluationFramework(
             user1, user2, interpreter,
             name=f"comparison_{config['name'].replace(' ', '_')}"
         )
         
-        conversation = framework.run_conversation(initial_message, num_turns=2)
+        messages = [
+            "I need help understanding the technical documentation for your API.",
+            "Of course! What specific part would you like me to explain?"
+        ]
+        conversation = framework.run_conversation(messages=messages)
         metrics = framework.evaluate_translation_quality()
         
         results.append({
@@ -158,7 +162,7 @@ def multi_language_scenario():
         )
         
         framework = EvaluationFramework(user1, user2, interpreter)
-        conversation = framework.run_conversation("Hello! How can I help you?", num_turns=1)
+        conversation = framework.run_conversation(messages=["Hello! How can I help you?"])
         
         print(f"  Original: {conversation[0]['original_message']}")
         print(f"  Translated: {conversation[0]['translated_message']}")

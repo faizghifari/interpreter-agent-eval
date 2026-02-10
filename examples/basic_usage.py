@@ -63,14 +63,14 @@ def example_with_manual_users():
         name="example_manual_users"
     )
     
-    # Run a simple conversation
+    # Run a simple conversation with list of messages for multi-turn
     print("\nStarting conversation...")
-    initial_message = "Hello! How are you doing today?"
-    conversation = framework.run_conversation(
-        initial_message=initial_message,
-        num_turns=3,
-        from_user=1
-    )
+    messages = [
+        "Hello! How are you doing today?",
+        "I'm doing well, thank you! How about you?",
+        "Great! What are you working on?"
+    ]
+    conversation = framework.run_conversation(messages=messages)
     
     # Display conversation
     print("\nConversation Log:")
@@ -159,11 +159,11 @@ def example_with_llm_users():
         name="example_llm_users"
     )
     
-    # Run conversation
+    # Run conversation with list of messages
     conversation = framework.run_conversation(
-        initial_message="I'm thinking about visiting Barcelona next month.",
-        num_turns=3,
-        from_user=1
+        messages=["I'm thinking about visiting Barcelona next month.",
+                  "That sounds wonderful! What do you want to see there?",
+                  "I'd like to visit the Sagrada Familia and Park Güell."]
     )
     
     # Evaluate and export

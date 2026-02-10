@@ -64,9 +64,10 @@ interpreter = InterpreterAgent(
     target_language="spa"
 )
 
-# Run evaluation
+# Run evaluation with list of messages for multi-turn conversation
 framework = EvaluationFramework(user1, user2, interpreter)
-conversation = framework.run_conversation("Hello!", num_turns=3)
+messages = ["Hello!", "Hi there! How can I help you?", "I have a question about your services."]
+conversation = framework.run_conversation(messages=messages)
 
 # Export results
 framework.export_results('results.json', format='json')
@@ -96,11 +97,15 @@ interpreter = InterpreterAgent(
     target_language="spa"
 )
 
-# Run evaluation
+# Run evaluation with list of messages
 framework = EvaluationFramework(user1, user2, interpreter)
-conversation = framework.run_conversation(
+messages = [
     "I'm interested in learning about your culture.",
-    num_turns=5
+    "That's wonderful! What would you like to know?",
+    "Tell me about traditional celebrations."
+]
+conversation = framework.run_conversation(
+    messages=messages
 )
 ```
 
@@ -141,10 +146,8 @@ interpreter = InterpreterAgent(
 )
 
 framework = EvaluationFramework(user1, user2, interpreter)
-conversation = framework.run_conversation(
-    "I'd like to discuss the project requirements.",
-    num_turns=5
-)
+messages = ["I'd like to discuss the project requirements.", "Certainly! What are your main priorities?"]
+conversation = framework.run_conversation(messages=messages)
 ```
 
 ## Running Examples

@@ -93,12 +93,17 @@ class User:
         
         if self.conversation_history:
             prompt_parts.append("\nConversation history:")
-            for msg in self.conversation_history[-5:]:  # Last 5 messages
+            for msg in self.conversation_history[-10:]:  # Last 10 messages
                 role = msg["role"]
                 content = msg["content"]
-                prompt_parts.append(f"{role}: {content}")
+                # Only include user's own messages and received messages (from interpreter)
+                if role == "assistant" or role == "received":
+                    if role == "received":
+                        prompt_parts.append(f"other person (via interpreter): {content}")
+                    else:
+                        prompt_parts.append(f"you: {content}")
         
-        prompt_parts.append(f"\nIncoming message: {message}")
+        prompt_parts.append(f"\nNew message from other person (via interpreter): {message}")
         prompt_parts.append(f"\nRespond in {self.language}:")
         
         return "\n".join(prompt_parts)

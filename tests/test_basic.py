@@ -114,8 +114,9 @@ def test_evaluation_framework():
     assert framework.user2 == user2
     assert framework.interpreter == interpreter
     
-    # Run conversation
-    conversation = framework.run_conversation("Hello", num_turns=3)
+    # Run conversation with list of messages for multi-turn
+    messages = ["Hello", "Hi there", "How are you?"]
+    conversation = framework.run_conversation(messages)
     assert len(conversation) == 3
     assert all('turn' in turn for turn in conversation)
     assert all('original_message' in turn for turn in conversation)

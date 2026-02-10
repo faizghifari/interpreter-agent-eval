@@ -89,11 +89,13 @@ interpreter = InterpreterAgent(
 # Create evaluation framework
 framework = EvaluationFramework(user1, user2, interpreter)
 
-# Run conversation
-conversation = framework.run_conversation(
-    initial_message="Hello! How are you?",
-    num_turns=5
-)
+# Run conversation with list of messages (each message alternates between users)
+messages = [
+    "Hello! How are you?",
+    "I'm doing well, thanks! How about you?",
+    "Great! What brings you here today?"
+]
+conversation = framework.run_conversation(messages=messages)
 
 # Evaluate and export results
 metrics = framework.evaluate_translation_quality()
@@ -134,9 +136,14 @@ interpreter = InterpreterAgent(
     target_language="spa"
 )
 
-# Run evaluation
+# Run evaluation with list of messages
 framework = EvaluationFramework(user1, user2, interpreter)
-conversation = framework.run_conversation("Let's discuss the project timeline.", num_turns=5)
+messages = [
+    "Let's discuss the project timeline.",
+    "Sure! When do you need it completed?",
+    "We're hoping for end of next month."
+]
+conversation = framework.run_conversation(messages=messages)
 ```
 
 ### Using Different Providers

@@ -41,31 +41,28 @@ class EvaluationFramework:
     
     def run_conversation(
         self,
-        initial_message: str,
-        num_turns: int = 5,
+        messages: List[str],
         from_user: int = 1
     ) -> List[Dict[str, Any]]:
-        """Run a conversation between the two users.
+        """Run a conversation between the two users via the interpreter.
         
         Args:
-            initial_message: The initial message to start the conversation
-            num_turns: Number of conversation turns
+            messages: List of messages to exchange. Each message is sent by alternating users.
             from_user: Which user starts (1 or 2)
             
         Returns:
             List of conversation exchanges
             
         Note:
-            For multi-turn conversations with non-LLM users, each turn will echo
-            the previous translation since non-LLM users cannot generate new responses.
-            For realistic multi-turn testing, use LLM-powered users (is_llm=True) or
-            call run_conversation() multiple times with different initial messages.
+            Users only communicate through the interpreter agent. Each user's conversation
+            history contains only their own messages and the interpreter's translated responses.
+            For LLM-powered users, they generate responses based on the translated messages
+            they receive from the interpreter.
         """
         current_user = self.user1 if from_user == 1 else self.user2
         other_user = self.user2 if from_user == 1 else self.user1
-        current_message = initial_message
         
-        for turn in range(num_turns):
+        for turn, message in enumerate(messages):
             # Record the turn
             turn_data = {
                 "turn": turn + 1,
@@ -74,8 +71,8 @@ class EvaluationFramework:
                 "to_user": other_user.name
             }
             
-            # User sends message in their language
-            sent_message = current_user.send_message(current_message)
+            # Current user sends message in their language
+            sent_message = current_user.send_message(message)
             turn_data["original_message"] = sent_message
             turn_data["original_language"] = current_user.language
             
@@ -93,17 +90,14 @@ class EvaluationFramework:
             turn_data["translated_language"] = translation_result["translation_language"]
             turn_data["translation_time"] = translation_time
             
-            # Other user receives the translation
-            other_user.receive_message(translation_result["translation"])
+            # Other user receives the translation from interpreter (not directly from the user)
+            other_user.receive_message(translation_result["translation"], metadata={"from": "interpreter"})
             
             # Log the turn
             self.conversation_log.append(turn_data)
             
-            # Prepare for next turn
-            if turn < num_turns - 1:
-                # Other user responds
-                current_message = translation_result["translation"]
-                current_user, other_user = other_user, current_user
+            # Swap users for next turn
+            current_user, other_user = other_user, current_user
         
         return self.conversation_log
     
