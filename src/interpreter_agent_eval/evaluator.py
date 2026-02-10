@@ -1,9 +1,10 @@
 """Evaluation framework for interpreter agents."""
 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import json
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .user import User
 from .interpreter import InterpreterAgent
@@ -155,6 +156,9 @@ class EvaluationFramework:
             "conversation": self.conversation_log,
             "metrics": self.metrics
         }
+        
+        # Ensure parent directory exists
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
         
         if format == "json":
             with open(filepath, 'w', encoding='utf-8') as f:

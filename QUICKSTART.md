@@ -177,7 +177,7 @@ provider = OpenAIProvider(api_key="...", model_name="gpt-3.5-turbo")
 ### Google AI Studio
 ```python
 from interpreter_agent_eval.providers import GoogleAIProvider
-provider = GoogleAIProvider(api_key="...", model_name="gemini-pro")
+provider = GoogleAIProvider(api_key="...", model_name="gemini-2.0-flash-exp")
 ```
 
 ### OpenRouter

@@ -135,7 +135,6 @@ def test_data_handler():
     print("Testing data handler...")
     
     import tempfile
-    import json
     
     # Create temp directory
     with tempfile.TemporaryDirectory() as tmpdir:

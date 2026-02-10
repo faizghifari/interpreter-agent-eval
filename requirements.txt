@@ -1,8 +1,8 @@
 # Core dependencies
 # Note: Install only the providers you plan to use
 
-# For Google AI Studio
-google-generativeai>=0.3.0
+# For Google AI Studio (new package)
+google-genai>=0.1.0
 
 # For OpenAI and OpenRouter (uses OpenAI-compatible API)
 openai>=1.0.0

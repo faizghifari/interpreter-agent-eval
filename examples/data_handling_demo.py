@@ -2,7 +2,6 @@
 
 import os
 import sys
-import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -36,7 +35,7 @@ def demonstrate_data_export():
     
     framework = EvaluationFramework(user1, user2, interpreter, name="data_demo")
     conversation = framework.run_conversation("Hello there!", num_turns=3)
-    metrics = framework.evaluate_translation_quality()
+    framework.evaluate_translation_quality()
     
     output_dir = os.path.join(os.path.dirname(__file__), 'output')
     os.makedirs(output_dir, exist_ok=True)
@@ -101,7 +100,7 @@ def demonstrate_aggregation():
         )
         
         framework = EvaluationFramework(user1, user2, interpreter, name=f"eval_{i}")
-        conversation = framework.run_conversation("Test message", num_turns=2 + i)
+        framework.run_conversation("Test message", num_turns=2 + i)
         metrics = framework.evaluate_translation_quality()
         
         filepath = os.path.join(output_dir, f'eval_{i}.json')

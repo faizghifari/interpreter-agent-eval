@@ -7,7 +7,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
-from interpreter_agent_eval.providers import OpenAIProvider
 
 # This example demonstrates basic usage with mock/manual responses
 # For real usage, you would configure actual API keys

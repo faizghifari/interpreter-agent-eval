@@ -32,10 +32,10 @@ setup(
         # Core dependencies will be optional - users install what they need
     ],
     extras_require={
-        "google": ["google-generativeai>=0.3.0"],
+        "google": ["google-genai>=0.1.0"],
         "openai": ["openai>=1.0.0"],
         "all": [
-            "google-generativeai>=0.3.0",
+            "google-genai>=0.1.0",
             "openai>=1.0.0",
         ],
         "dev": [

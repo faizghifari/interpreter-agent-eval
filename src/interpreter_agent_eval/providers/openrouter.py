@@ -1,6 +1,6 @@
 """OpenRouter provider implementation."""
 
-from typing import Optional, Dict, Any
+from typing import Optional
 from .base import LLMProvider
 
 

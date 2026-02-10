@@ -9,8 +9,7 @@ from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
 from interpreter_agent_eval.providers import (
     OpenAIProvider,
     GoogleAIProvider,
-    OpenRouterProvider,
-    VLLMProvider
+    OpenRouterProvider
 )
 from interpreter_agent_eval.utils import DataHandler
 

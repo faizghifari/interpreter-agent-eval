@@ -144,7 +144,7 @@ from interpreter_agent_eval.providers import GoogleAIProvider
 
 provider = GoogleAIProvider(
     api_key="your-google-api-key",
-    model_name="gemini-pro",
+    model_name="gemini-2.0-flash-exp",
     temperature=0.7
 )
 ```
@@ -214,7 +214,7 @@ interpreter-agent-eval/
 │   ├── config.template           # Configuration template
 │   ├── translation_brief_example.txt
 │   └── user_context_*.txt        # Example contexts
-├── tests/                        # Test files (to be added)
+├── tests/                        # Test files
 ├── requirements.txt              # Python dependencies
 ├── README.md                     # This file
 └── LICENSE
