@@ -31,15 +31,15 @@ def test_user_creation():
     print("Testing user creation...")
     
     # Test manual user
-    user1 = User(name="Alice", language="English", is_llm=False)
+    user1 = User(name="Alice", language="eng", is_llm=False)
     assert user1.name == "Alice"
-    assert user1.language == "English"
+    assert user1.language == "eng"
     assert user1.is_llm is False
     assert len(user1.conversation_history) == 0
     
     # Test LLM user
     provider = MockLLMProvider()
-    user2 = User(name="Bob", language="Spanish", is_llm=True, llm_provider=provider)
+    user2 = User(name="Bob", language="spa", is_llm=True, llm_provider=provider)
     assert user2.is_llm is True
     assert user2.llm_provider is not None
     
@@ -51,14 +51,14 @@ def test_user_send_message():
     print("Testing user message sending...")
     
     # Manual user
-    user1 = User(name="Alice", language="English", is_llm=False)
+    user1 = User(name="Alice", language="eng", is_llm=False)
     msg = user1.send_message("Hello")
     assert msg == "Hello"
     assert len(user1.conversation_history) == 1
     
     # LLM user
     provider = MockLLMProvider(response="Hola")
-    user2 = User(name="Bob", language="Spanish", is_llm=True, llm_provider=provider)
+    user2 = User(name="Bob", language="spa", is_llm=True, llm_provider=provider)
     msg = user2.send_message("Input message")
     assert msg == "Hola"
     assert provider.call_count == 1
@@ -74,8 +74,8 @@ def test_interpreter_translation():
     interpreter = InterpreterAgent(
         llm_provider=provider,
         translation_brief="Translate accurately",
-        source_language="English",
-        target_language="Spanish"
+        source_language="eng",
+        target_language="spa"
     )
     
     translation = interpreter.translate("Hello, how are you?")
@@ -87,8 +87,8 @@ def test_interpreter_translation():
     history = interpreter.get_translation_history()
     assert len(history) == 1
     assert history[0]["original"] == "Hello, how are you?"
-    assert history[0]["from"] == "English"
-    assert history[0]["to"] == "Spanish"
+    assert history[0]["from"] == "eng"
+    assert history[0]["to"] == "spa"
     
     print("  ✓ Interpreter translation tests passed")
 
@@ -99,13 +99,13 @@ def test_evaluation_framework():
     
     # Setup
     provider = MockLLMProvider(response="Translation")
-    user1 = User(name="Alice", language="English", is_llm=False)
-    user2 = User(name="Bob", language="Spanish", is_llm=False)
+    user1 = User(name="Alice", language="eng", is_llm=False)
+    user2 = User(name="Bob", language="spa", is_llm=False)
     interpreter = InterpreterAgent(
         llm_provider=provider,
         translation_brief="Translate",
-        source_language="English",
-        target_language="Spanish"
+        source_language="eng",
+        target_language="spa"
     )
     
     # Create framework

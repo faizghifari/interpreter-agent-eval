@@ -22,26 +22,26 @@ def example_with_manual_users():
     class MockProvider:
         def generate(self, prompt, **kwargs):
             # Simple mock translation
-            if "Spanish" in prompt:
+            if "spa" in prompt or "Spanish" in prompt:
                 return "Hola, ¿cómo estás?"
-            elif "English" in prompt:
+            elif "eng" in prompt or "English" in prompt:
                 return "Hello, how are you?"
             return "Translation result"
         
         def get_provider_name(self):
             return "Mock Provider"
     
-    # Create two users speaking different languages
+    # Create two users speaking different languages (using ISO 639-3 codes)
     user1 = User(
         name="Alice",
-        language="English",
+        language="eng",  # English
         is_llm=False,
         context="You are a friendly person having a casual conversation"
     )
     
     user2 = User(
         name="Carlos",
-        language="Spanish",
+        language="spa",  # Spanish
         is_llm=False,
         context="Eres una persona amigable teniendo una conversación casual"
     )
@@ -50,8 +50,8 @@ def example_with_manual_users():
     interpreter = InterpreterAgent(
         llm_provider=MockProvider(),
         translation_brief="Translate naturally and maintain the conversational tone.",
-        source_language="English",
-        target_language="Spanish",
+        source_language="eng",
+        target_language="spa",
         name="TranslatorBot"
     )
     
@@ -128,7 +128,7 @@ def example_with_llm_users():
     # Create LLM-powered users
     user1 = User(
         name="AI Alice",
-        language="English",
+        language="eng",  # English
         is_llm=True,
         llm_provider=llm_provider,
         context="You are a friendly English speaker discussing travel plans"
@@ -136,7 +136,7 @@ def example_with_llm_users():
     
     user2 = User(
         name="AI Carlos",
-        language="Spanish",
+        language="spa",  # Spanish
         is_llm=True,
         llm_provider=llm_provider,
         context="Eres un hablante de español amigable discutiendo planes de viaje"
@@ -146,8 +146,8 @@ def example_with_llm_users():
     interpreter = InterpreterAgent(
         llm_provider=llm_provider,
         translation_brief="Translate accurately while preserving tone and context.",
-        source_language="English",
-        target_language="Spanish",
+        source_language="eng",
+        target_language="spa",
         name="AI Translator"
     )
     

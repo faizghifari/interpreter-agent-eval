@@ -66,16 +66,16 @@ def compare_providers():
     for config in providers_config:
         print(f"\nTesting {config['name']}...")
         
-        # Create users (manual for consistent testing)
-        user1 = User(name="TechUser", language="English", is_llm=False)
-        user2 = User(name="DevUser", language="Spanish", is_llm=False)
+        # Create users (manual for consistent testing, using ISO 639-3 codes)
+        user1 = User(name="TechUser", language="eng", is_llm=False)  # English
+        user2 = User(name="DevUser", language="spa", is_llm=False)   # Spanish
         
         # Create interpreter with this provider
         interpreter = InterpreterAgent(
             llm_provider=config['provider'],
             translation_brief=translation_brief,
-            source_language="English",
-            target_language="Spanish",
+            source_language="eng",
+            target_language="spa",
             name=f"Interpreter-{config['name']}"
         )
         
@@ -124,11 +124,11 @@ def multi_language_scenario():
     # Mock provider for demonstration
     class MockProvider:
         def generate(self, prompt, **kwargs):
-            if "French" in prompt:
+            if "fra" in prompt or "French" in prompt:
                 return "Bonjour! Comment puis-je vous aider?"
-            elif "German" in prompt:
+            elif "deu" in prompt or "German" in prompt:
                 return "Guten Tag! Wie kann ich Ihnen helfen?"
-            elif "Japanese" in prompt:
+            elif "jpn" in prompt or "Japanese" in prompt:
                 return "こんにちは！どのようにお手伝いできますか？"
             return "Translation"
         
@@ -137,11 +137,11 @@ def multi_language_scenario():
     
     provider = MockProvider()
     
-    # Test different language pairs
+    # Test different language pairs (using ISO 639-3 codes)
     language_pairs = [
-        ("English", "French"),
-        ("English", "German"),
-        ("English", "Japanese")
+        ("eng", "fra"),  # English → French
+        ("eng", "deu"),  # English → German
+        ("eng", "jpn")   # English → Japanese
     ]
     
     for source, target in language_pairs:

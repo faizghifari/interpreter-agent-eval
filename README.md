@@ -10,6 +10,9 @@ This framework enables evaluation of LLM-powered interpreter agents that bridge 
 - **Flexible User Types**: Human users or LLM-powered users
 - **Translation Evaluation**: Track and analyze translation quality and performance
 - **Data Management**: Export and analyze conversation data
+- **ISO 639-3 Language Codes**: Standardized three-letter language codes (e.g., 'eng' for English, 'spa' for Spanish, 'fra' for French)
+
+> **Note**: This framework uses ISO 639-3 three-letter language codes for consistency and standardization. Common codes include: `eng` (English), `spa` (Spanish), `fra` (French), `deu` (German), `jpn` (Japanese), `zho` (Chinese), `ara` (Arabic), `hin` (Hindi), `por` (Portuguese), `rus` (Russian). See [ISO 639-3](https://iso639-3.sil.org/code_tables/639/data) for a complete list.
 
 ## Features
 
@@ -70,17 +73,17 @@ export OPENROUTER_API_KEY='your-openrouter-api-key'
 from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
 from interpreter_agent_eval.providers import OpenAIProvider
 
-# Create users
-user1 = User(name="Alice", language="English", is_llm=False)
-user2 = User(name="Carlos", language="Spanish", is_llm=False)
+# Create users (using ISO 639-3 language codes)
+user1 = User(name="Alice", language="eng", is_llm=False)  # English
+user2 = User(name="Carlos", language="spa", is_llm=False)  # Spanish
 
 # Create interpreter with an LLM provider
 provider = OpenAIProvider(api_key="your-key", model_name="gpt-3.5-turbo")
 interpreter = InterpreterAgent(
     llm_provider=provider,
     translation_brief="Translate naturally and maintain conversational tone.",
-    source_language="English",
-    target_language="Spanish"
+    source_language="eng",
+    target_language="spa"
 )
 
 # Create evaluation framework
@@ -109,7 +112,7 @@ provider = OpenAIProvider(api_key="your-key", model_name="gpt-4")
 # Create LLM-powered users
 user1 = User(
     name="AI Alice",
-    language="English",
+    language="eng",  # English (ISO 639-3)
     is_llm=True,
     llm_provider=provider,
     context="You are a friendly professional discussing a project."
@@ -117,7 +120,7 @@ user1 = User(
 
 user2 = User(
     name="AI Carlos", 
-    language="Spanish",
+    language="spa",  # Spanish (ISO 639-3)
     is_llm=True,
     llm_provider=provider,
     context="Eres un profesional amigable discutiendo un proyecto."
@@ -127,8 +130,8 @@ user2 = User(
 interpreter = InterpreterAgent(
     llm_provider=provider,
     translation_brief="Translate accurately while preserving context.",
-    source_language="English",
-    target_language="Spanish"
+    source_language="eng",
+    target_language="spa"
 )
 
 # Run evaluation
@@ -271,7 +274,7 @@ User contexts help LLM-powered users maintain consistent personas:
 
 ```python
 context_en = DataHandler.load_user_context('config/user_context_en.txt')
-user = User(name="Alice", language="English", is_llm=True, 
+user = User(name="Alice", language="eng", is_llm=True,  # English (ISO 639-3)
             llm_provider=provider, context=context_en)
 ```
 

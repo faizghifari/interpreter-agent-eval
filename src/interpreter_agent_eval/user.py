@@ -21,7 +21,7 @@ class User:
         
         Args:
             name: Name/identifier for the user
-            language: Language the user speaks (e.g., 'English', 'Spanish', 'French')
+            language: ISO 639-3 language code (e.g., 'eng' for English, 'spa' for Spanish, 'fra' for French)
             is_llm: Whether this user is powered by an LLM
             llm_provider: LLM provider instance if is_llm is True
             context: Context information for the user

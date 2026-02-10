@@ -2,6 +2,8 @@
 
 This guide will help you get started with the Interpreter Agent Evaluation Framework.
 
+> **Language Codes**: This framework uses ISO 639-3 three-letter language codes. Common codes: `eng` (English), `spa` (Spanish), `fra` (French), `deu` (German), `jpn` (Japanese), `zho` (Chinese), `ara` (Arabic), `hin` (Hindi), `por` (Portuguese), `rus` (Russian). See [ISO 639-3](https://iso639-3.sil.org/code_tables/639/data) for more.
+
 ## Installation
 
 1. Clone the repository:
@@ -50,16 +52,16 @@ class MockProvider:
     def get_provider_name(self):
         return "Mock"
 
-# Create users
-user1 = User(name="Alice", language="English", is_llm=False)
-user2 = User(name="Carlos", language="Spanish", is_llm=False)
+# Create users (using ISO 639-3 language codes)
+user1 = User(name="Alice", language="eng", is_llm=False)  # English
+user2 = User(name="Carlos", language="spa", is_llm=False)  # Spanish
 
 # Create interpreter
 interpreter = InterpreterAgent(
     llm_provider=MockProvider(),
     translation_brief="Translate naturally",
-    source_language="English",
-    target_language="Spanish"
+    source_language="eng",
+    target_language="spa"
 )
 
 # Run evaluation
@@ -84,14 +86,14 @@ provider = OpenAIProvider(
 )
 
 # Create users and interpreter
-user1 = User("Alice", "English", is_llm=False)
-user2 = User("Carlos", "Spanish", is_llm=False)
+user1 = User("Alice", "eng", is_llm=False)  # English (ISO 639-3)
+user2 = User("Carlos", "spa", is_llm=False)  # Spanish (ISO 639-3)
 
 interpreter = InterpreterAgent(
     llm_provider=provider,
     translation_brief="Translate naturally while preserving tone",
-    source_language="English",
-    target_language="Spanish"
+    source_language="eng",
+    target_language="spa"
 )
 
 # Run evaluation
@@ -114,10 +116,10 @@ provider = OpenAIProvider(
     model_name='gpt-4'
 )
 
-# Both users are LLM-powered
+# Both users are LLM-powered (using ISO 639-3 language codes)
 user1 = User(
     name="AI Alice",
-    language="English",
+    language="eng",  # English
     is_llm=True,
     llm_provider=provider,
     context="You are a friendly software developer from the US."
@@ -125,7 +127,7 @@ user1 = User(
 
 user2 = User(
     name="AI Carlos",
-    language="Spanish",
+    language="spa",  # Spanish
     is_llm=True,
     llm_provider=provider,
     context="Eres un ingeniero de software amigable de España."
@@ -134,8 +136,8 @@ user2 = User(
 interpreter = InterpreterAgent(
     llm_provider=provider,
     translation_brief="Translate accurately",
-    source_language="English",
-    target_language="Spanish"
+    source_language="eng",
+    target_language="spa"
 )
 
 framework = EvaluationFramework(user1, user2, interpreter)

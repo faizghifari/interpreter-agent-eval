@@ -24,13 +24,13 @@ def demonstrate_data_export():
             return "Mock Provider"
     
     # Create a sample conversation
-    user1 = User("Alice", "English", is_llm=False)
-    user2 = User("Bob", "Spanish", is_llm=False)
+    user1 = User("Alice", "eng", is_llm=False)  # English
+    user2 = User("Bob", "spa", is_llm=False)    # Spanish
     interpreter = InterpreterAgent(
         llm_provider=MockProvider(),
         translation_brief="Translate accurately",
-        source_language="English",
-        target_language="Spanish"
+        source_language="eng",
+        target_language="spa"
     )
     
     framework = EvaluationFramework(user1, user2, interpreter, name="data_demo")
@@ -90,13 +90,13 @@ def demonstrate_aggregation():
     
     # Create multiple evaluation runs
     for i in range(3):
-        user1 = User(f"User{i}_1", "English", is_llm=False)
-        user2 = User(f"User{i}_2", "Spanish", is_llm=False)
+        user1 = User(f"User{i}_1", "eng", is_llm=False)  # English
+        user2 = User(f"User{i}_2", "spa", is_llm=False)  # Spanish
         interpreter = InterpreterAgent(
             llm_provider=MockProvider(),
             translation_brief="Translate",
-            source_language="English",
-            target_language="Spanish"
+            source_language="eng",
+            target_language="spa"
         )
         
         framework = EvaluationFramework(user1, user2, interpreter, name=f"eval_{i}")
