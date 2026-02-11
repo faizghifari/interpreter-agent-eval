@@ -39,12 +39,12 @@ def compare_providers():
         )
 
     # Google AI
-    if os.getenv("GOOGLE_API_KEY"):
+    if os.getenv("GEMINI_API_KEY"):
         providers_config.append(
             {
                 "name": "Google Gemini",
                 "provider": GoogleAIProvider(
-                    api_key=os.getenv("GOOGLE_API_KEY"), model_name="gemini-pro"
+                    api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-pro"
                 ),
             }
         )
@@ -63,7 +63,7 @@ def compare_providers():
 
     if not providers_config:
         print("No API keys configured. Please set at least one:")
-        print("  OPENAI_API_KEY, GOOGLE_API_KEY, or OPENROUTER_API_KEY")
+        print("  OPENAI_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY")
         return
 
     results = []

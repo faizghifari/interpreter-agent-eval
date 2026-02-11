@@ -182,11 +182,11 @@ def example_google_ai():
     print("Example 3: Google AI Studio Provider")
     print("=" * 80)
 
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        print("\nSkipping Google AI example - GOOGLE_API_KEY not set")
+        print("\nSkipping Google AI example - GEMINI_API_KEY not set")
         print("To run this example, set your Google AI Studio API key:")
-        print("  export GOOGLE_API_KEY='your-api-key-here'")
+        print("  export GEMINI_API_KEY='your-api-key-here'")
         return
 
     print("\nGoogle AI Studio provider is configured.")

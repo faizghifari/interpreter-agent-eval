@@ -31,7 +31,7 @@ pip install -e .
 1. **Configure Environment**:
    ```bash
    cp .env.example .env
-   # Add your API keys (OPENAI_API_KEY, GOOGLE_API_KEY, etc.)
+   # Add your API keys (OPENAI_API_KEY, GEMINI_API_KEY, etc.)
    ```
 
 2. **Basic Usage**:
