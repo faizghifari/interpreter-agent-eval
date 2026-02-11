@@ -1,6 +1,8 @@
 """Interpreter agent for translating between users."""
 
 from typing import Optional, Dict, Any
+from iso639 import Lang
+from interpreter_agent_eval.prompts.templates import DEFAULT_TRANSLATION_BRIEF, TRANSLATION_TASK
 
 
 class InterpreterAgent:
@@ -13,26 +15,58 @@ class InterpreterAgent:
     def __init__(
         self,
         llm_provider: Any,
-        translation_brief: str,
         source_language: str,
         target_language: str,
+        translation_brief: Optional[str] = None,
         name: str = "Interpreter"
     ):
         """Initialize the InterpreterAgent.
         
         Args:
             llm_provider: LLM provider instance for translation
-            translation_brief: Instructions/guidelines for translation
-            source_language: Source language code
-            target_language: Target language code
+            source_language: Source language code (ISO 639-3)
+            target_language: Target language code (ISO 639-3)
+            translation_brief: Optional custom instructions/guidelines for translation.
+                If None, uses DEFAULT_TRANSLATION_BRIEF populated with source/target languages.
             name: Name for the interpreter agent
         """
         self.llm_provider = llm_provider
-        self.translation_brief = translation_brief
         self.source_language = source_language
         self.target_language = target_language
         self.name = name
         self.translation_history = []
+        
+        if translation_brief:
+            self.translation_brief = translation_brief
+        else:
+            self.translation_brief = self._prepare_default_brief(source_language, target_language)
+            
+    def _prepare_default_brief(self, source_code: str, target_code: str) -> str:
+        """Prepare the default translation brief with language details.
+        
+        Args:
+            source_code: Source language code
+            target_code: Target language code
+            
+        Returns:
+            Populated translation brief
+        """
+        try:
+            source_lang = Lang(source_code)
+            source_name = f"{source_lang.name} ({source_lang.pt3})"
+        except Exception:
+            source_name = source_code
+            
+        try:
+            target_lang = Lang(target_code)
+            target_name = f"{target_lang.name} ({target_lang.pt3})"
+        except Exception:
+            target_name = target_code
+            
+        return DEFAULT_TRANSLATION_BRIEF.format(
+            user_a_language=source_name,
+            user_b_language=target_name
+        )
     
     def translate(
         self,
@@ -56,7 +90,7 @@ class InterpreterAgent:
         to_lang = to_language or self.target_language
         
         prompt = self._build_translation_prompt(message, from_lang, to_lang, context)
-        translation = self.llm_provider.generate(prompt)
+        translation = self.llm_provider.generate(prompt, system_prompt=self.translation_brief)
         
         # Record translation
         self.translation_history.append({
@@ -87,23 +121,27 @@ class InterpreterAgent:
         Returns:
             Formatted translation prompt
         """
-        prompt_parts = [
-            f"Translation Brief: {self.translation_brief}",
-            "",
-            f"Translate the following message from {from_language} to {to_language}."
-        ]
+        # Get language names for the prompt
+        try:
+            from_lang_val = Lang(from_language)
+            from_lang_name = f"{from_lang_val.name} ({from_lang_val.pt3})"
+        except Exception:
+            from_lang_name = from_language
+            
+        try:
+            to_lang_val = Lang(to_language)
+            to_lang_name = f"{to_lang_val.name} ({to_lang_val.pt3})"
+        except Exception:
+            to_lang_name = to_language
+
+        context_str = f"Context: {context}" if context else ""
         
-        if context:
-            prompt_parts.append(f"Context: {context}")
-        
-        prompt_parts.extend([
-            "",
-            f"Message to translate: {message}",
-            "",
-            f"Translation ({to_language}):"
-        ])
-        
-        return "\n".join(prompt_parts)
+        return TRANSLATION_TASK.format(
+            from_language=from_lang_name,
+            to_language=to_lang_name,
+            context=context_str,
+            message=message
+        )
     
     def get_translation_history(self) -> list:
         """Get the translation history.
