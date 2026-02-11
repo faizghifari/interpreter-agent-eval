@@ -20,6 +20,7 @@ dependencies = [
     "aiohttp>=3.13.3",
     "datasets>=4.5.0",
     "google-genai>=1.62.0",
+    "iso639-lang>=2.6.3",
     "openai>=2.20.0",
     "requests>=2.32.5",
     "transformers>=5.1.0",
