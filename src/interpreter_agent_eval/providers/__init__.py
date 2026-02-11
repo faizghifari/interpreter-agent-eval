@@ -13,5 +13,5 @@ __all__ = [
     "OpenAIProvider",
     "FriendliProvider",
     "OpenRouterProvider",
-    "VLLMProvider"
+    "VLLMProvider",
 ]
