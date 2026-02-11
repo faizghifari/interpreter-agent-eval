@@ -89,25 +89,25 @@ class GoogleAIProvider(LLMProvider):
         # Extract special parameters
         # System instruction
         system_instruction = kwargs.pop("system_instruction", system_prompt)
-        
+
         # Thinking config: Check both kwargs and config_params (defaults)
         # We pop from config_params to avoid "multiple values" error
         default_thinking = config_params.pop("thinking_config", None)
         thinking_config = kwargs.pop("thinking_config", default_thinking)
-        
+
         # If thinking_config is a dict, wrap it in types.ThinkingConfig
         if isinstance(thinking_config, dict):
             # Map 'thinking_level' or 'include_thoughts' from dict
             t_level = thinking_config.get("thinking_level")
             inc_thoughts = thinking_config.get("include_thoughts")
-            
+
             # Construct dictionary for ThinkingConfig constructor, filtering None
             tc_kwargs = {}
             if t_level is not None:
                 tc_kwargs["thinking_level"] = t_level
             if inc_thoughts is not None:
                 tc_kwargs["include_thoughts"] = inc_thoughts
-                
+
             if tc_kwargs:
                 thinking_config = types.ThinkingConfig(**tc_kwargs)
 
