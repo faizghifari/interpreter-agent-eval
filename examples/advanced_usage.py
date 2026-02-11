@@ -93,7 +93,7 @@ def compare_providers():
         )
 
         messages = [
-            "I need help understanding the technical documentation for your API.",
+            initial_message,
             "Of course! What specific part would you like me to explain?",
         ]
         conversation = framework.run_conversation(messages=messages)
