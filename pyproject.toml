@@ -1,0 +1,46 @@
+[project]
+name = "interpreter-agent-eval"
+version = "0.1.0"
+description = "Evaluation framework for interpreter/translator agents"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Faiz Ghifari Haznitrama" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "aiohttp>=3.13.3",
+    "datasets>=4.5.0",
+    "google-genai>=1.62.0",
+    "openai>=2.20.0",
+    "requests>=2.32.5",
+    "transformers>=5.1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/faizghifari/interpreter-agent-eval"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+    "flake8>=7.3.0",
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/interpreter_agent_eval"]
+

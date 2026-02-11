@@ -1,10 +1,6 @@
 """Example usage of the interpreter agent evaluation framework."""
 
 import os
-import sys
-
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
 
@@ -17,7 +13,7 @@ def example_with_manual_users():
     print("=" * 80)
     print("Example 1: Manual Users")
     print("=" * 80)
-    
+
     # Create a simple mock provider for demonstration
     class MockProvider:
         def generate(self, prompt, **kwargs):
@@ -27,75 +23,76 @@ def example_with_manual_users():
             elif "eng" in prompt or "English" in prompt:
                 return "Hello, how are you?"
             return "Translation result"
-        
+
         def get_provider_name(self):
             return "Mock Provider"
-    
+
     # Create two users speaking different languages (using ISO 639-3 codes)
     user1 = User(
         name="Alice",
         language="eng",  # English
         is_llm=False,
-        context="You are a friendly person having a casual conversation"
+        context="You are a friendly person having a casual conversation",
     )
-    
+
     user2 = User(
         name="Carlos",
         language="spa",  # Spanish
         is_llm=False,
-        context="Eres una persona amigable teniendo una conversación casual"
+        context="Eres una persona amigable teniendo una conversación casual",
     )
-    
+
     # Create interpreter with translation brief
     interpreter = InterpreterAgent(
         llm_provider=MockProvider(),
         translation_brief="Translate naturally and maintain the conversational tone.",
         source_language="eng",
         target_language="spa",
-        name="TranslatorBot"
+        name="TranslatorBot",
     )
-    
+
     # Create evaluation framework
     framework = EvaluationFramework(
-        user1=user1,
-        user2=user2,
-        interpreter=interpreter,
-        name="example_manual_users"
+        user1=user1, user2=user2, interpreter=interpreter, name="example_manual_users"
     )
-    
+
     # Run a simple conversation with list of messages for multi-turn
     print("\nStarting conversation...")
     messages = [
         "Hello! How are you doing today?",
         "I'm doing well, thank you! How about you?",
-        "Great! What are you working on?"
+        "Great! What are you working on?",
     ]
     conversation = framework.run_conversation(messages=messages)
-    
+
     # Display conversation
     print("\nConversation Log:")
     for turn in conversation:
         print(f"\nTurn {turn['turn']}:")
-        print(f"  {turn['from_user']}: {turn['original_message']} ({turn['original_language']})")
-        print(f"  Translation: {turn['translated_message']} ({turn['translated_language']})")
+        print(
+            f"  {turn['from_user']}: {turn['original_message']} ({turn['original_language']})"
+        )
+        print(
+            f"  Translation: {turn['translated_message']} ({turn['translated_language']})"
+        )
         print(f"  Time: {turn['translation_time']:.3f}s")
-    
+
     # Evaluate
     metrics = framework.evaluate_translation_quality()
     print("\nMetrics:")
     for key, value in metrics.items():
         print(f"  {key}: {value}")
-    
+
     # Export results
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
     os.makedirs(output_dir, exist_ok=True)
-    
-    json_path = os.path.join(output_dir, 'example_manual_users.json')
-    framework.export_results(json_path, format='json')
+
+    json_path = os.path.join(output_dir, "example_manual_users.json")
+    framework.export_results(json_path, format="json")
     print(f"\nResults exported to: {json_path}")
-    
-    txt_path = os.path.join(output_dir, 'example_manual_users.txt')
-    framework.export_results(txt_path, format='txt')
+
+    txt_path = os.path.join(output_dir, "example_manual_users.txt")
+    framework.export_results(txt_path, format="txt")
     print(f"Results exported to: {txt_path}")
 
 
@@ -104,18 +101,18 @@ def example_with_llm_users():
     print("\n" + "=" * 80)
     print("Example 2: LLM-Powered Users (Requires API Keys)")
     print("=" * 80)
-    
+
     # Check for API key
-    api_key = os.getenv('OPENAI_API_KEY')
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("\nSkipping LLM example - OPENAI_API_KEY not set")
         print("To run this example, set your OpenAI API key:")
         print("  export OPENAI_API_KEY='your-api-key-here'")
         return
-    
+
     print("\nNote: This example uses real API calls and will incur costs.")
     print("Uncomment the code below to run.")
-    
+
     # Uncomment to actually run with real API
     """
     # Create LLM provider
@@ -184,14 +181,14 @@ def example_google_ai():
     print("\n" + "=" * 80)
     print("Example 3: Google AI Studio Provider")
     print("=" * 80)
-    
-    api_key = os.getenv('GOOGLE_API_KEY')
+
+    api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         print("\nSkipping Google AI example - GOOGLE_API_KEY not set")
         print("To run this example, set your Google AI Studio API key:")
         print("  export GOOGLE_API_KEY='your-api-key-here'")
         return
-    
+
     print("\nGoogle AI Studio provider is configured.")
     print("Uncomment the code in the example to use it.")
 
@@ -201,7 +198,7 @@ def example_vllm():
     print("\n" + "=" * 80)
     print("Example 4: vLLM Server")
     print("=" * 80)
-    
+
     print("\nTo use vLLM:")
     print("1. Start a vLLM server with a HuggingFace model:")
     print("   python -m vllm.entrypoints.openai.api_server \\")
@@ -213,13 +210,13 @@ def example_vllm():
 
 if __name__ == "__main__":
     print("Interpreter Agent Evaluation Framework - Examples\n")
-    
+
     # Run examples
     example_with_manual_users()
     example_with_llm_users()
     example_google_ai()
     example_vllm()
-    
+
     print("\n" + "=" * 80)
     print("Examples completed!")
     print("=" * 80)
