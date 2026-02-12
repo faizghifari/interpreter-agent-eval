@@ -6,6 +6,22 @@ A framework for evaluating interpreter/translator agents between users speaking 
 from .user import User
 from .interpreter import InterpreterAgent
 from .evaluator import EvaluationFramework
+from .models import JudgeCriterionResult, JudgeEvaluation, LanguageCheckResult
+from .utils import (
+    load_glotlid_model,
+    verify_language_with_glotlid,
+    LanguageVerificationResult,
+)
 
 __version__ = "0.1.0"
-__all__ = ["User", "InterpreterAgent", "EvaluationFramework"]
+__all__ = [
+    "User",
+    "InterpreterAgent",
+    "EvaluationFramework",
+    "JudgeCriterionResult",
+    "JudgeEvaluation",
+    "LanguageCheckResult",
+    "load_glotlid_model",
+    "verify_language_with_glotlid",
+    "LanguageVerificationResult",
+]
