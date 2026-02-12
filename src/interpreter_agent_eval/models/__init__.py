@@ -1,7 +1,5 @@
-"""Models module for data structures (placeholder for future extensions)."""
+"""Models module for data structures."""
 
-# This module can be extended with data classes for:
-# - Conversation turns
-# - Evaluation metrics
-# - Translation quality scores
-# etc.
+from .evaluation import JudgeCriterionResult, JudgeEvaluation, LanguageCheckResult
+
+__all__ = ["JudgeCriterionResult", "JudgeEvaluation", "LanguageCheckResult"]
