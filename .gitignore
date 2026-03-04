@@ -208,3 +208,7 @@ __marimo__/
 *.env
 .env.*
 examples/output/
+
+# Data and outputs
+data/
+outputs/
