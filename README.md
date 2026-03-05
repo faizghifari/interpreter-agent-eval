@@ -4,73 +4,82 @@ A comprehensive framework for evaluating LLM-powered interpreter agents that fac
 
 ## Features
 
-- **Multiple Providers**: Google AI Studio, OpenAI, OpenRouter, vLLM.
+- **Multiple Providers**: Google AI Studio (Gemini 3 Pro/Flash), OpenAI (GPT-4o), Friendli (EXAONE), OpenRouter, vLLM.
+- **AI-as-Judge Evaluation**: Integrated evaluation framework with structured verification checklists and "Yes/No" metrics.
+- **Language Verification**: Built-in support for GlotLID to ensure users maintain monolingual behavior and avoid code-switching.
 - **Flexible Interactions**: Supports Human-to-Human, Human-to-AI, and AI-to-AI simulations.
-- **Data Analysis**: Track translation quality and export conversation logs.
-- **Standardized**: Uses ISO 639-3 language codes (e.g., `eng`, `spa`, `fra`).
+- **Standardized**: Uses ISO 639-3 three-letter language codes (e.g., `eng`, `spa`, `ind`, `kor`, `arb`).
 
 ## Installation
 
 This project is managed with [uv](https://github.com/astral-sh/uv).
 
 ```bash
-git clone https://github.com/faizghifari/interpreter-agent-eval.git
-cd interpreter-agent-eval
-
 # Install dependencies
 uv sync
-```
 
-Alternatively, you can install with pip:
-```bash
-pip install -e .
+# Run evaluation scripts
+uv run python scripts/run_custom_eval.py
 ```
 
 ## Quick Start
 
-1. **Configure Environment**:
-   ```bash
-   cp .env.example .env
-   # Add your API keys (OPENAI_API_KEY, GEMINI_API_KEY, etc.)
-   ```
+### 1. Configure Environment
+```bash
+cp .env.example .env
+# Add your API keys (OPENAI_API_KEY, GEMINI_API_KEY, FRIENDLI_TOKEN, etc.)
+```
 
-2. **Basic Usage**:
+### 2. Run Automated Evaluation
+The framework is designed for large-scale evaluation using predefined scenarios in JSONL format.
 
-   ```python
-   import os
-   from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
-   from interpreter_agent_eval.providers import OpenAIProvider
+```bash
+uv run python scripts/run_custom_eval.py --data data/enriched/id_kr.jsonl --num_samples 5
+```
 
-   # 1. Setup Provider
-   provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"), model_name="gpt-4o")
+### 3. Basic Library Usage (Programmatic)
 
-   # 2. Setup Users (using ISO 639-3 codes)
-   user1 = User("Alice", "eng", is_llm=False)
-   user2 = User("Carlos", "spa", is_llm=False)
+```python
+import os
+from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
+from interpreter_agent_eval.providers import GoogleAIProvider
 
-   # 3. Setup Interpreter
-   interpreter = InterpreterAgent(
-       llm_provider=provider,
-       translation_brief="Translate naturally and maintain tone.",
-       source_language="eng",
-       target_language="spa"
-   )
+# 1. Setup Provider
+provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3-flash-preview")
 
-   # 4. Run Conversation
-   framework = EvaluationFramework(user1, user2, interpreter)
-   messages = ["Hello!", "Hola, ¿cómo estás?", "I am good, thanks!"]
-   conversation = framework.run_conversation(messages=messages)
+# 2. Setup Users (using ISO 639-3 codes)
+user1 = User("Alice", "eng", is_llm=False)
+user2 = User("Carlos", "ind", is_llm=True, llm_provider=provider)
 
-   # 5. Export Results
-   framework.export_results("results.json")
-   ```
+# 3. Setup Interpreter
+interpreter = InterpreterAgent(
+    llm_provider=provider,
+    source_language="eng",
+    target_language="ind"
+)
+
+# 4. Run Conversation
+framework = EvaluationFramework(user1, user2, interpreter)
+conversation = framework.run_conversation(messages=["I'd like to book a room."])
+
+# 5. Evaluate with a Judge
+judge_provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3-pro-preview")
+evaluation = framework.evaluate_with_judge(
+    judge_llm_provider=judge_provider,
+    verification_prompt="1. Did the interpreter mention booking a room?\n2. Is the translation in Indonesian?"
+)
+print(f"Completion Rate: {evaluation.get_completion_rate()}")
+```
 
 ## Project Structure
 
 ```
-├── config/         # Configuration templates & contexts
-├── examples/       # Usage examples (basic, advanced, data)
-├── src/            # Source code
+├── data/           # Evaluation datasets (CSV/JSONL)
+├── scripts/        # Execution scripts for simulation and analysis
+├── src/            # Core framework source code
+│   ├── models/     # Pydantic models for structured output
+│   ├── providers/  # LLM provider implementations
+│   └── utils/      # Language detection and data handling
 ├── tests/          # Unit tests
 └── pyproject.toml  # Dependencies & metadata
 ```
