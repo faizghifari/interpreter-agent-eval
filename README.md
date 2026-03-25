@@ -37,6 +37,34 @@ The framework is designed for large-scale evaluation using predefined scenarios 
 uv run python scripts/run_custom_eval.py --data data/enriched/id_kr.jsonl --num_samples 5
 ```
 
+### 3. Generate MAPS-Based Pragmatic Augmentation Data
+
+Use Indonesian MAPS seed proverbs to generate enriched single-turn interpreter tasks with:
+- inferred speech act / pragmatic intent,
+- mandatory cultural-social constraints,
+- layered checklist (Semantic Core, Pragmatic Function, Cultural/Social Constraints),
+- output schema compatible with existing JSONL workflows.
+
+Generation model:
+- `gemini-3.1-pro-preview` (data construction)
+
+Optional simulation/evaluation model:
+- `gemini-3.1-flash-lite-preview` (target-user simulation and judge evaluation)
+
+```bash
+# Generate ind->kor and ind->arb data from MAPS test split
+uv run python scripts/augment_maps_data.py \
+  --seed-xlsx data/MAPS_Final/id/test_proverbs.xlsx \
+  --seed-split test_proverbs \
+  --targets kor,arb
+
+# Generate limited rows, then run simulation/evaluation on first N samples
+uv run python scripts/augment_maps_data.py \
+  --limit 20 \
+  --run-eval \
+  --eval-samples 5
+```
+
 ### 3. Basic Library Usage (Programmatic)
 
 ```python

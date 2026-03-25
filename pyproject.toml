@@ -25,6 +25,7 @@ dependencies = [
     "iso639-lang>=2.6.3",
     "matplotlib>=3.10.8",
     "openai>=2.20.0",
+    "openpyxl>=3.1.5",
     "pandas>=2.3.3",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
