@@ -1,49 +1,31 @@
 import argparse
-import glob
-from pathlib import Path
-import pandas as pd
-import json
-import matplotlib.pyplot as plt
 import os
+
+import matplotlib.pyplot as plt
+import pandas as pd
 from tabulate import tabulate
+
+from eval_utils import add_input_args, load_jsonl_records, project_root, resolve_input_files
 
 
 def load_data(filepaths):
-    data = []
-    for filepath in filepaths:
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                    # Infer language pair if not explicitly clear, though filename helps
-                    # But the record has source_lang and target_lang
-                    lang_pair = f"{record.get('source_lang', 'unknown')} -> {record.get('target_lang', 'unknown')}"
-                    record["language_pair"] = lang_pair
-                    data.append(record)
-                except json.JSONDecodeError:
-                    continue
-    return pd.DataFrame(data)
+    records = load_jsonl_records(filepaths)
+    for record in records:
+        record["language_pair"] = (
+            f"{record.get('source_lang', 'unknown')} -> {record.get('target_lang', 'unknown')}"
+        )
+    return pd.DataFrame(records)
 
 
 def parse_args():
-    root_dir = Path(__file__).resolve().parent.parent
+    root_dir = project_root()
     default_outputs = root_dir / "outputs"
     default_analysis = default_outputs / "analysis"
 
     parser = argparse.ArgumentParser(
         description="Analyze evaluation JSONL outputs and generate summary report/plots."
     )
-    parser.add_argument(
-        "--inputs",
-        nargs="+",
-        default=None,
-        help="One or more JSONL files to analyze. If omitted, all outputs/re_eval_*.jsonl are used.",
-    )
-    parser.add_argument(
-        "--input-glob",
-        default=str(default_outputs / "re_eval_*.jsonl"),
-        help="Glob pattern used when --inputs is not provided.",
-    )
+    add_input_args(parser, str(default_outputs / "re_eval_*.jsonl"))
     parser.add_argument(
         "--output-dir",
         default=str(default_analysis),
@@ -53,14 +35,11 @@ def parse_args():
 
 
 def analyze_results(files, output_dir):
-
-    # Check if files exist
-    existing_files = [f for f in files if os.path.exists(f)]
-    if not existing_files:
+    if not files:
         print("No input files found.")
         return
 
-    df = load_data(existing_files)
+    df = load_data(files)
 
     # ensure success_rate is float
     df["success_rate"] = pd.to_numeric(df["success_rate"], errors="coerce")
@@ -138,5 +117,4 @@ def analyze_results(files, output_dir):
 
 if __name__ == "__main__":
     args = parse_args()
-    files = args.inputs or sorted(glob.glob(args.input_glob))
-    analyze_results(files=files, output_dir=args.output_dir)
+    analyze_results(files=resolve_input_files(args), output_dir=args.output_dir)

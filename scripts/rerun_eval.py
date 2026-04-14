@@ -1,22 +1,20 @@
 import argparse
-import glob
-import os
 import json
+import os
 import sys
 from datetime import datetime
-from dotenv import load_dotenv
 from pathlib import Path
 
-# Ensure src is in python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(current_dir)
-src_dir = os.path.join(root_dir, "src")
-sys.path.append(src_dir)
+from dotenv import load_dotenv
 
+# Ensure src is in python path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from eval_utils import add_input_args, load_jsonl_records, project_root, resolve_input_files
+from interpreter_agent_eval.evaluator import EvaluationFramework
+from interpreter_agent_eval.interpreter import InterpreterAgent
 from interpreter_agent_eval.providers import GoogleAIProvider
 from interpreter_agent_eval.user import User
-from interpreter_agent_eval.interpreter import InterpreterAgent
-from interpreter_agent_eval.evaluator import EvaluationFramework
 
 # Load environment variables
 load_dotenv()
@@ -52,16 +50,7 @@ def re_evaluate_file(input_file_path: str, judge_provider):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(output_dir, f"re_eval_{base_name}_{timestamp}.jsonl")
 
-    samples = []
-    with open(input_file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                samples.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    samples = load_jsonl_records([input_file_path])
 
     print(f"Loaded {len(samples)} samples.")
 
@@ -163,20 +152,11 @@ def re_evaluate_file(input_file_path: str, judge_provider):
 
 
 def main():
+    default_glob = str(project_root() / "outputs" / "eval_*.jsonl")
     parser = argparse.ArgumentParser(
         description="Re-evaluate existing evaluation JSONL files with the judge model."
     )
-    parser.add_argument(
-        "--inputs",
-        nargs="+",
-        default=None,
-        help="One or more evaluation JSONL files. If omitted, outputs/eval_*.jsonl is used.",
-    )
-    parser.add_argument(
-        "--input-glob",
-        default=str(Path(root_dir) / "outputs" / "eval_*.jsonl"),
-        help="Glob pattern used when --inputs is not provided.",
-    )
+    add_input_args(parser, default_glob)
     args = parser.parse_args()
 
     print("Initializing Judge Provider...")
@@ -186,8 +166,7 @@ def main():
         print(f"Failed to create judge provider: {e}")
         return
 
-    files_to_process = args.inputs or sorted(glob.glob(args.input_glob))
-
+    files_to_process = resolve_input_files(args)
     if not files_to_process:
         print("No input files found for re-evaluation.")
         return

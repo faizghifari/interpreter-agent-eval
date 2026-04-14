@@ -34,13 +34,13 @@ TARGETS = {
 
 class LayeredChecklist(BaseModel):
     layer_1_semantic_core: List[str] = Field(
-        description="Yes/No criteria for literal semantic transfer. Every criterion must be phrased so Yes means success."
+        description="Yes/No criteria for semantic transfer. Keep this layer minimal compared to layer 2 and layer 3. Every criterion must be phrased so Yes means success."
     )
     layer_2_pragmatic_function: List[str] = Field(
-        description="Yes/No criteria for underlying speech act success. Every criterion must be phrased so Yes means success."
+        description="Yes/No criteria for pragmatic/speech-act success. This layer should be richer than layer 1. Every criterion must be phrased so Yes means success."
     )
     layer_3_cultural_social_constraints: List[str] = Field(
-        description="Yes/No criteria for culture/social adaptation success. Every criterion must be phrased so Yes means success."
+        description="Yes/No criteria for constraints that make literal translation insufficient (cultural, social, register, domain, implicit knowledge, etc.). This should be the most emphasized layer. Every criterion must be phrased so Yes means success."
     )
 
 
@@ -56,7 +56,7 @@ class MAPSAugmentedData(BaseModel):
         description="Short literal meaning summary that must be preserved"
     )
     mandatory_cultural_constraints: List[str] = Field(
-        description="Concrete cultural/social constraints needed for faithful translation"
+        description="Concrete mandatory translation constraints (not only cultural) needed for faithful and useful translation beyond literal transfer"
     )
     conversation_context: str = Field(
         description="One-sentence neutral conversation setup in English"
@@ -98,22 +98,211 @@ Required language direction:
 
 Task requirements:
 1) Infer the most likely underlying speech act / pragmatic intent from the seed context.
-2) Identify explicit cultural/social constraints that the interpreter must preserve or explain in the target culture if unknown.
+2) Identify mandatory translation constraints that the interpreter must preserve or explain. These are NOT limited to cultural constraints; include any constraint that makes literal translation insufficient (pragmatic, social, register, politeness, domain-specific, implicit assumptions, etc.).
 3) Build realistic conversation and user contexts for a one-turn simulation.
 4) Produce a strict 3-layer checklist:
-   - Layer 1 Semantic Core (Know): literal content fidelity.
-   - Layer 2 Pragmatic Function (Do): speech act and communicative function fidelity.
-   - Layer 3 Cultural/Social Constraints (Feel): target-culture adaptation (e.g., honorifics, hierarchy, politeness norms, social scripts, implied norms from CultureAtlas-style reasoning).
+   - Layer 1 Semantic Core (Know): literal content fidelity. Keep this compact.
+   - Layer 2 Pragmatic Function (Do): speech act and communicative function fidelity. Emphasize this layer.
+   - Layer 3 Constraint Bridging (Feel): adaptation/bridging constraints beyond literal transfer (often cultural-social, but can be other constraint types). Emphasize this most.
 5) Every checklist item must be binary yes/no where YES means translation success.
 6) The checklist must be evaluable from either translated text and/or target user response.
 
 Output constraints:
-- user_a_context must be in Indonesian.
-- user_b_context must be in the target language and script.
+- conversation_context must be exactly one short sentence in English and only describe who/where/what at a surface level.
+- conversation_context must not leak constraints, expected misunderstanding, expected outcomes, or solution hints.
+- user_a_context must be in Indonesian and only describe User A profile, background, goals, and own situation.
+- user_b_context must be in the target language/script and only describe User B profile, background, goals, and own situation.
+- user contexts must NOT include instructions/hints about what the other user will say/do, expected response strategy, or suggested reaction (e.g., empathize, agree, reject, clarify specific trap).
 - source_text must be a natural Indonesian single-turn utterance, not a glossary explanation.
 - verification_prompt must be numbered (1., 2., 3., ...), concise, and only yes/no-oriented success criteria.
-- Keep cultural constraints actionable and concrete (avoid vague statements).
+- Checklist priority: layer_3 count >= layer_2 count >= layer_1 count; prioritize layer 3 first, then layer 2, then layer 1.
+- Keep mandatory translation constraints actionable and concrete (avoid vague statements).
 """
+
+
+HINT_PATTERNS = [
+    r"be ready to",
+    r"ready to sympath",
+    r"prepare to",
+    r"you are waiting for",
+    r"if .* then",
+    r"when .* then",
+    r"expected to",
+    r"respond by",
+    r"공감하",
+    r"위로해",
+    r"상대방.*대답",
+    r"상대방.*반응",
+    r"إذا .* ف",
+    r"عندما .* ف",
+    r"استعد",
+]
+
+
+def _english_tokens(text: str) -> set:
+    return set(re.findall(r"[a-zA-Z]{4,}", (text or "").lower()))
+
+
+def _sentence_count(text: str) -> int:
+    return len(re.findall(r"[.!?]+", (text or "").strip()))
+
+
+def _contains_hinting_language(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(re.search(pat, lowered) for pat in HINT_PATTERNS)
+
+
+def _split_sentences(text: str) -> List[str]:
+    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    result: List[str] = []
+    for item in items:
+        k = item.strip().lower()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        result.append(item.strip())
+    return result
+
+
+def _strip_hint_sentences(text: str) -> str:
+    sentences = _split_sentences(text)
+    kept = [s for s in sentences if not _contains_hinting_language(s)]
+    if kept:
+        return " ".join(kept)
+    return sentences[0] if sentences else text
+
+
+def repair_generated_sample(generated: MAPSAugmentedData) -> MAPSAugmentedData:
+    """Apply deterministic post-processing to enforce quality constraints."""
+    # 1) conversation_context: keep one short sentence.
+    cc_sentences = _split_sentences(generated.conversation_context)
+    if cc_sentences:
+        generated.conversation_context = cc_sentences[0]
+    else:
+        generated.conversation_context = (
+            "Two people are discussing a real-life situation in a conversation."
+        )
+
+    # 2) user contexts: remove response-hinting sentences.
+    generated.user_a_context = _strip_hint_sentences(generated.user_a_context)
+    generated.user_b_context = _strip_hint_sentences(generated.user_b_context)
+
+    # 3) Rebalance checklist priority toward L3 then L2 then L1.
+    l1 = _dedupe_keep_order(generated.checklist.layer_1_semantic_core)
+    l2 = _dedupe_keep_order(generated.checklist.layer_2_pragmatic_function)
+    l3 = _dedupe_keep_order(generated.checklist.layer_3_cultural_social_constraints)
+
+    # Keep layer 1 compact.
+    if len(l1) > 2:
+        l2.extend(l1[2:])
+        l1 = l1[:2]
+
+    # Ensure minimum presence in each layer.
+    if not l1 and l2:
+        l1.append(l2.pop())
+    if len(l2) < 2 and l3:
+        needed = 2 - len(l2)
+        l2.extend(l3[:needed])
+    if len(l3) < 2 and l2:
+        needed = 2 - len(l3)
+        l3.extend(l2[:needed])
+
+    # Re-dedupe after moving items.
+    l1 = _dedupe_keep_order(l1)
+    l2 = _dedupe_keep_order(l2)
+    l3 = _dedupe_keep_order(l3)
+
+    # Enforce ordering counts: l3 >= l2 >= l1
+    while len(l2) < len(l1) and l1:
+        l2.append(l1[-1])
+        l2 = _dedupe_keep_order(l2)
+        if len(l2) >= len(l1):
+            break
+        l1 = l1[:-1] if len(l1) > 1 else l1
+
+    if len(l3) < len(l2):
+        l3.extend(l2[len(l3) :])
+        l3 = _dedupe_keep_order(l3)
+
+    generated.checklist.layer_1_semantic_core = l1 or [
+        "Does the translation preserve the core factual meaning of the source utterance?"
+    ]
+    generated.checklist.layer_2_pragmatic_function = l2 or [
+        "Does the translation preserve the speaker's communicative intent?",
+        "Does the target response show successful pragmatic understanding?",
+    ]
+    generated.checklist.layer_3_cultural_social_constraints = l3 or [
+        "Does the translation bridge key non-literal constraints required for understanding?",
+        "Does the translation avoid leaving culture- or context-bound terms unexplained when needed?",
+    ]
+
+    return generated
+
+
+def compose_verification_prompt(checklist: LayeredChecklist) -> str:
+    """Compose normalized numbered checklist with L3 -> L2 -> L1 priority."""
+    ordered_items: List[str] = []
+
+    for item in checklist.layer_3_cultural_social_constraints:
+        ordered_items.append(item.strip())
+    for item in checklist.layer_2_pragmatic_function:
+        ordered_items.append(item.strip())
+    for item in checklist.layer_1_semantic_core:
+        ordered_items.append(item.strip())
+
+    cleaned = [it for it in ordered_items if it]
+    return "\n".join(f"{idx}. {item}" for idx, item in enumerate(cleaned, 1))
+
+
+def validate_generated_sample(generated: MAPSAugmentedData) -> List[str]:
+    """Validate generated sample quality and return a list of violations."""
+    errors: List[str] = []
+
+    # 1) Conversation context quality: one short sentence and no leakage.
+    cc = (generated.conversation_context or "").strip()
+    if not cc:
+        errors.append("conversation_context is empty")
+    elif _sentence_count(cc) != 1:
+        errors.append("conversation_context must be exactly one sentence")
+
+    # Soft leakage check: large overlap with constraints text is suspicious.
+    constraint_text = " ".join(generated.mandatory_cultural_constraints or [])
+    overlap = _english_tokens(cc) & _english_tokens(constraint_text)
+    if len(overlap) >= 3:
+        errors.append(
+            "conversation_context appears to leak constraint details "
+            f"(overlap tokens: {sorted(list(overlap))[:6]})"
+        )
+
+    # 2) User context quality: no hints about expected other-side behavior.
+    if _contains_hinting_language(generated.user_a_context):
+        errors.append("user_a_context contains behavior/reaction hinting")
+
+    if _contains_hinting_language(generated.user_b_context):
+        errors.append("user_b_context contains behavior/reaction hinting")
+
+    # 3) Checklist emphasis quality.
+    l1 = len(generated.checklist.layer_1_semantic_core)
+    l2 = len(generated.checklist.layer_2_pragmatic_function)
+    l3 = len(generated.checklist.layer_3_cultural_social_constraints)
+
+    if l1 < 1:
+        errors.append("layer_1_semantic_core must have at least 1 item")
+    if l2 < 2:
+        errors.append("layer_2_pragmatic_function must have at least 2 items")
+    if l3 < 2:
+        errors.append("layer_3_cultural_social_constraints must have at least 2 items")
+    if not (l3 >= l2 >= l1):
+        errors.append(
+            "checklist priority violation: require layer_3 >= layer_2 >= layer_1"
+        )
+
+    return errors
 
 
 def create_generation_provider() -> GoogleAIProvider:
@@ -204,9 +393,26 @@ def generate_one_sample(
         response_schema=MAPSAugmentedData,
     )
     generated = MAPSAugmentedData.model_validate_json(text)
+
+    # Always canonicalize verification prompt from layered checklist with L3 priority.
+    generated.verification_prompt = compose_verification_prompt(generated.checklist)
+
+    # Keep fallback normalization for safety.
     generated.verification_prompt = normalize_verification_prompt(
         generated.verification_prompt
     )
+
+    generated = repair_generated_sample(generated)
+
+    validation_errors = validate_generated_sample(generated)
+    hard_failures = [
+        e
+        for e in validation_errors
+        if "is empty" in e or "at least" in e or "priority violation" in e
+    ]
+    if hard_failures:
+        raise ValueError("; ".join(hard_failures))
+
     return generated
 
 
@@ -281,6 +487,7 @@ def augment_maps_data(
     limit: Optional[int],
     start_row: int,
     targets: List[str],
+    continue_on_interrupt: bool = False,
 ) -> List[str]:
     print("Initializing generation provider: gemini-3.1-pro-preview")
     provider = create_generation_provider()
@@ -336,12 +543,21 @@ def augment_maps_data(
                         generated=generated,
                     )
                     append_jsonl(output_path, output_record)
+                    # Mark as existing immediately so retries/interrupt paths do not re-append.
+                    existing.add(key)
+                    success = True
                     if i % 10 == 0 or i == len(rows):
                         print(
                             f"  [{i}/{len(rows)}] seed_row_id={row['seed_row_id']} generated"
                         )
-                    success = True
                     break
+                except KeyboardInterrupt as e:
+                    if not continue_on_interrupt:
+                        raise
+                    print(
+                        f"  [{i}/{len(rows)}] seed_row_id={row['seed_row_id']} attempt {attempt}/{max_retries} interrupted: {e}"
+                    )
+                    time.sleep(2)
                 except Exception as e:
                     print(
                         f"  [{i}/{len(rows)}] seed_row_id={row['seed_row_id']} attempt {attempt}/{max_retries} failed: {e}"
@@ -528,6 +744,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable GlotLID language checks in judge evaluation.",
     )
+    parser.add_argument(
+        "--continue-on-interrupt",
+        action="store_true",
+        help="Treat KeyboardInterrupt during row generation as a retryable failure instead of aborting the full run.",
+    )
     return parser.parse_args()
 
 
@@ -545,6 +766,7 @@ def main() -> None:
         limit=args.limit,
         start_row=args.start_row,
         targets=targets,
+        continue_on_interrupt=args.continue_on_interrupt,
     )
 
     print("\nGenerated files:")

@@ -287,7 +287,9 @@ def _fallback_context_window_summary(row: Dict[str, Any], direction: str) -> str
 def _fallback_conversation_context(row: Dict[str, Any], direction: str) -> str:
     prev_ctx = row.get("prev_context", []) or []
     reason_tags = _extract_reason_tags(row)
-    reason_text = ", ".join(reason_tags[:3]) if reason_tags else "local pragmatic continuity"
+    reason_text = (
+        ", ".join(reason_tags[:3]) if reason_tags else "local pragmatic continuity"
+    )
     return (
         f"The interaction is already in progress with {len(prev_ctx)} earlier turns. "
         f"The current source utterance should be interpreted with {reason_text} carried from prior dialogue state. "
@@ -338,12 +340,18 @@ def _split_exchanges(text: str) -> List[str]:
     return exchanges if exchanges else [compact]
 
 
-def _collect_prev_exchanges(row: Dict[str, Any], direction: str, side: str) -> List[str]:
+def _collect_prev_exchanges(
+    row: Dict[str, Any], direction: str, side: str
+) -> List[str]:
     prev_ctx = row.get("prev_context", []) or []
     exchanges: List[str] = []
 
     for ctx_row in prev_ctx:
-        text = _ctx_target_text(ctx_row, direction) if side == "target" else _ctx_source_text(ctx_row, direction)
+        text = (
+            _ctx_target_text(ctx_row, direction)
+            if side == "target"
+            else _ctx_source_text(ctx_row, direction)
+        )
         exchanges.extend(_split_exchanges(text))
 
     return exchanges
@@ -382,11 +390,15 @@ def _build_conversation_history_block(row: Dict[str, Any], direction: str) -> st
     target_lines = _build_last5_labeled_exchanges(row, direction, side="target")
 
     if direction == "id_kor":
-        source_header = "Riwayat pertukaran sebelumnya (bahasa User A / sumber - Indonesia):"
+        source_header = (
+            "Riwayat pertukaran sebelumnya (bahasa User A / sumber - Indonesia):"
+        )
         target_header = "이전 발화 교환 기록 (User B 언어 / 대상 - 한국어):"
     else:
         source_header = "이전 발화 교환 기록 (User A 언어 / 원문 - 한국어):"
-        target_header = "Riwayat pertukaran sebelumnya (bahasa User B / target - Indonesia):"
+        target_header = (
+            "Riwayat pertukaran sebelumnya (bahasa User B / target - Indonesia):"
+        )
 
     source_block = "\n".join(source_lines) if source_lines else "- (none)"
     target_block = "\n".join(target_lines) if target_lines else "- (none)"
@@ -625,7 +637,9 @@ def _strip_existing_turn_history(text: str) -> str:
     return out
 
 
-def _contains_current_source_text(context_text: str, row: Dict[str, Any], direction: str) -> bool:
+def _contains_current_source_text(
+    context_text: str, row: Dict[str, Any], direction: str
+) -> bool:
     current_source = (
         _as_string(row.get("source_text", ""))
         if direction == "id_kor"
@@ -704,7 +718,9 @@ def _sanitize_non_transcript_context(
     out = re.sub(r"\bTurn\s*-?\d+\b", "", out, flags=re.IGNORECASE)
     out = re.sub(r"\s+", " ", out).strip()
     out = _strip_guidance_phrases(out)
-    out = _trim_to_sentence_window(out, min_sentences=min_sentences, max_sentences=max_sentences)
+    out = _trim_to_sentence_window(
+        out, min_sentences=min_sentences, max_sentences=max_sentences
+    )
     return out.strip()
 
 
@@ -731,7 +747,9 @@ def _repair_generated_sample(
         max_sentences=4,
     )
     context_window_summary = _strip_existing_turn_history(context_window_summary)
-    if not context_window_summary or _contains_english_template_language(context_window_summary):
+    if not context_window_summary or _contains_english_template_language(
+        context_window_summary
+    ):
         context_window_summary = fallback_window
     context_window_summary = _strip_guidance_phrases(context_window_summary)
     generated["context_window_summary"] = context_window_summary
@@ -741,7 +759,9 @@ def _repair_generated_sample(
         min_sentences=2,
         max_sentences=5,
     )
-    if not conversation_context or _contains_english_template_language(conversation_context):
+    if not conversation_context or _contains_english_template_language(
+        conversation_context
+    ):
         conversation_context = fallback_conversation
     generated["conversation_context"] = conversation_context
 
@@ -848,8 +868,12 @@ def _validate_generated_sample(
 ) -> List[str]:
     errors: List[str] = []
 
-    cc = _trim_to_sentence_window(_as_string(generated.get("conversation_context", "")), 1, 10)
-    cws = _trim_to_sentence_window(_as_string(generated.get("context_window_summary", "")), 1, 10)
+    cc = _trim_to_sentence_window(
+        _as_string(generated.get("conversation_context", "")), 1, 10
+    )
+    cws = _trim_to_sentence_window(
+        _as_string(generated.get("context_window_summary", "")), 1, 10
+    )
 
     if not cc:
         errors.append("conversation_context is empty")
@@ -858,9 +882,13 @@ def _validate_generated_sample(
     if "Turn" in cc:
         errors.append("conversation_context should not include Turn numbering")
     if "User A:" in cc or "User B:" in cc:
-        errors.append("conversation_context should not expose transcript-style speaker lines")
+        errors.append(
+            "conversation_context should not expose transcript-style speaker lines"
+        )
     if re.search(r"\b(src|tgt)\s*:", cc, flags=re.IGNORECASE):
-        errors.append("conversation_context should not expose src/tgt transcript markers")
+        errors.append(
+            "conversation_context should not expose src/tgt transcript markers"
+        )
     if _contains_english_template_language(cc):
         errors.append("conversation_context contains English template prose")
     if not cws:
@@ -887,9 +915,13 @@ def _validate_generated_sample(
     if "User B" not in ub:
         errors.append("user_b_context must explicitly identify the user as User B")
     if "User A:" in ua or "User B:" in ua:
-        errors.append("user_a_context should not include transcript-style speaker lines")
+        errors.append(
+            "user_a_context should not include transcript-style speaker lines"
+        )
     if "User A:" in ub or "User B:" in ub:
-        errors.append("user_b_context should not include transcript-style speaker lines")
+        errors.append(
+            "user_b_context should not include transcript-style speaker lines"
+        )
     if re.search(r"\b(src|tgt)\s*:", ua, flags=re.IGNORECASE):
         errors.append("user_a_context should not expose src/tgt transcript markers")
     if re.search(r"\b(src|tgt)\s*:", ub, flags=re.IGNORECASE):
@@ -899,15 +931,23 @@ def _validate_generated_sample(
     if _contains_english_template_language(ub):
         errors.append("user_b_context contains English template prose")
     if direction is not None and _expected_user_role_marker(direction, "a") not in ua:
-        errors.append("user_a_context language marker does not match expected user language")
+        errors.append(
+            "user_a_context language marker does not match expected user language"
+        )
     if direction is not None and _expected_user_role_marker(direction, "b") not in ub:
-        errors.append("user_b_context language marker does not match expected user language")
+        errors.append(
+            "user_b_context language marker does not match expected user language"
+        )
 
     if row is not None and direction is not None:
         if _contains_current_source_text(cc, row, direction):
-            errors.append("conversation_context should not include current source utterance")
+            errors.append(
+                "conversation_context should not include current source utterance"
+            )
         if _contains_current_source_text(cws, row, direction):
-            errors.append("context_window_summary should not include current source utterance")
+            errors.append(
+                "context_window_summary should not include current source utterance"
+            )
         if _contains_current_source_text(ua, row, direction):
             errors.append("user_a_context should not include current source utterance")
         if _contains_current_source_text(ub, row, direction):
@@ -928,14 +968,18 @@ def _validate_generated_sample(
     if l3 < 2:
         errors.append("layer_3_cultural_social_constraints must have at least 2 items")
     if not (l3 >= l2 >= l1):
-        errors.append("checklist count priority must satisfy layer_3 >= layer_2 >= layer_1")
+        errors.append(
+            "checklist count priority must satisfy layer_3 >= layer_2 >= layer_1"
+        )
 
     l2_items = _as_string_list(checklist.get("layer_2_pragmatic_function"))
     if not _checklist_has_keyword(
         l2_items,
         ["context", "coher", "preced", "follow", "turn"],
     ):
-        errors.append("layer_2_pragmatic_function should include context-coherence criterion")
+        errors.append(
+            "layer_2_pragmatic_function should include context-coherence criterion"
+        )
 
     return errors
 
@@ -986,9 +1030,15 @@ def _build_output_record(
         "user_a_context": generated["user_a_context"],
         "user_b_context": generated["user_b_context"],
         "verification_prompt": generated["verification_prompt"],
-        "checklist_layer_1_semantic_core": generated["checklist"]["layer_1_semantic_core"],
-        "checklist_layer_2_pragmatic_function": generated["checklist"]["layer_2_pragmatic_function"],
-        "checklist_layer_3_cultural_social_constraints": generated["checklist"]["layer_3_cultural_social_constraints"],
+        "checklist_layer_1_semantic_core": generated["checklist"][
+            "layer_1_semantic_core"
+        ],
+        "checklist_layer_2_pragmatic_function": generated["checklist"][
+            "layer_2_pragmatic_function"
+        ],
+        "checklist_layer_3_cultural_social_constraints": generated["checklist"][
+            "layer_3_cultural_social_constraints"
+        ],
         "reasons": reason_tags,
         "source_row": {
             "worthiness_score": row.get("worthiness_score"),
