@@ -5,20 +5,26 @@ from .base import LLMProvider
 
 
 class OpenAIProvider(LLMProvider):
-    """OpenAI API provider."""
+    """OpenAI API provider (also compatible with OpenAI-compatible endpoints like LM Studio, Ollama)."""
 
     def __init__(
-        self, api_key: str, model_name: str = "gpt-3.5-turbo", **default_params
+        self,
+        api_key: str,
+        model_name: str = "gpt-3.5-turbo",
+        base_url: Optional[str] = None,
+        **default_params,
     ):
         """Initialize OpenAI provider.
 
         Args:
-            api_key: OpenAI API key
+            api_key: OpenAI API key (use any non-empty string for local servers)
             model_name: Model name (e.g., 'gpt-3.5-turbo', 'gpt-4')
+            base_url: Optional base URL for OpenAI-compatible endpoints (e.g., LM Studio, Ollama)
             **default_params: Default generation parameters
         """
         self.api_key = api_key
         self.model_name = model_name
+        self.base_url = base_url
         self.default_params = default_params
         self._client = None
 
@@ -28,7 +34,7 @@ class OpenAIProvider(LLMProvider):
             try:
                 from openai import OpenAI
 
-                self._client = OpenAI(api_key=self.api_key)
+                self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
             except ImportError:
                 raise ImportError(
                     "OpenAI SDK not installed. " "Install it with: pip install openai"
