@@ -76,6 +76,9 @@ class GoogleAIProvider(LLMProvider):
         from google.genai import types
 
         config_params = {**self.default_params}
+        # http_options is a client-level setting (e.g. request timeout); it must not
+        # be forwarded into GenerateContentConfig.
+        config_params.pop("http_options", None)
 
         # Handle parameter mapping (max_tokens -> max_output_tokens)
         if "max_tokens" in config_params:

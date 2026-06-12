@@ -229,40 +229,12 @@ class EvaluationFramework:
                 )
                 language_check_passed = response_verification.is_correct
 
-            # If translation language check failed, immediately fail all criteria
             if not translation_lang_check.is_correct:
                 language_check_passed = False
                 print(
                     f"Translation language check failed: {translation_lang_check.message}"
                 )
-
-                # Parse verification prompt to get criteria count
-                criteria_lines = [
-                    line.strip()
-                    for line in verification_prompt.split("\n")
-                    if line.strip() and line.strip()[0].isdigit()
-                ]
-
-                # Create failed evaluation without calling judge
-                failed_results = []
-                for i, line in enumerate(criteria_lines, 1):
-                    failed_results.append(
-                        JudgeCriterionResult(
-                            id=i,
-                            criteria=line.lstrip("0123456789. "),
-                            met=False,
-                            reasoning="Translation was in the wrong language - automatic failure",
-                        )
-                    )
-
-                evaluation = JudgeEvaluation(
-                    results=failed_results,
-                    translation_language_check=translation_lang_check,
-                    response_language_check=response_lang_check,
-                    language_check_passed=False,
-                )
-                self.judge_evaluation = evaluation
-                return evaluation
+                # Continue to judge — both LID and judge results are saved for independent analysis.
 
         # Build language verification info for prompt
         lang_verification_info = (

@@ -17,7 +17,7 @@ Note: You are only provided with the languages of the users. Do not assume any a
 1. **Necessary Adaptation**: Translate the situation, not just the words. Adapt idioms, honorifics, and cultural references to feel native to the target user, but ensure adaptations form a bridge, not a barrier. Do not over-localize.
 2. **Contextual Clarity**: If a concept in the source language implies specific needs or rules that are not obvious in the target language, you must clarify them.
 3. **Tone and Style**: Adjust the tone (formal/casual) to match the target culture's norms for the given situation.
-4. **Bracketed Clarifications**: Any additional clarification or context needed for understanding MUST be placed inside brackets () to separate it from the source text translation.
+4. **Bracketed Clarifications**: Any additional clarification or context needed for understanding MUST be placed inside brackets () and written in the **target language** — never in English or any other language. Do not add translator's notes, headings, or meta-commentary in any language other than the target language.
 
 ## Quality Standards
 - **Naturalness**: The translation should sound like it was originally spoken in the target language.
@@ -29,7 +29,9 @@ TRANSLATION_TASK = """Task: Translate the following message from {from_language}
 {context}
 Message to translate: {message}
 
-Translation ({to_language}):"""
+Output ONLY the translation in {to_language}. Any bracketed clarifications must also be in {to_language}. Do not include English headings, notes, or meta-commentary.
+
+Translation:"""
 
 JUDGE_EVALUATION_PROMPT = """You are an expert linguistic and cultural evaluator.
 Your task is to evaluate the quality of a translation given the conversation context, source text, the translation, and the target recipient's response.
