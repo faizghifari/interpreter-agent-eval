@@ -2,18 +2,385 @@ import argparse
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 LANGS: Dict[str, Dict[str, str]] = {
+    "arb": {"name": "Arabic", "label": "Arabic"},
+    "ben": {"name": "Bengali", "label": "Bengali"},
     "ind": {"name": "Indonesian", "label": "Bahasa Indonesia"},
     "kor": {"name": "Korean", "label": "Korean"},
 }
+
+# TMX pair name → (src ISO 639-3, tgt ISO 639-3)
+PAIR_LANGS: Dict[str, Tuple[str, str]] = {
+    "ar-bn": ("arb", "ben"),
+    "ar-id": ("arb", "ind"),
+    "ar-ko": ("arb", "kor"),
+    "bn-id": ("ben", "ind"),
+    "bn-ko": ("ben", "kor"),
+    "id-ko": ("ind", "kor"),
+}
+
+# Pair-specific cultural context injected into every checklist generation call.
+# Distilled from docs/cultural_context_pairs.md (peer-reviewed sources).
+# Covers: communication asymmetries, asymmetric cultural concepts, key bridging terms.
+CULTURAL_CONTEXT: Dict[str, str] = {
+    "ar-bn": """\
+Cultural asymmetries for Arabic ↔ Bengali interpretation:
+
+Communication style: Arabic uses emotional expressiveness, rhetorical repetition, and hyperbole as emphasis (not exaggeration). Bengali uses a three-tier pronoun system (apni/tumi/tui) and extensive kinship address forms to encode hierarchy. An Arab's animated, emphatic style can read as angry to a Bengali; a Bengali's quiet deference can read as cold to an Arab.
+
+Key asymmetric concepts — Arabic speakers know, Bengalis may not:
+- Wasta (واسطة): using personal connections to access jobs/permits is legitimate social capital, not corruption.
+- Inshallah (إن شاء الله): sincere theistic deference ("God willing"), not evasion or "maybe." Bengalis may misread it as non-commitment.
+- Fusha vs ammiya diglossia: Bengalis who learn Arabic for religious recitation (tajweed) cannot understand spoken Gulf or Egyptian dialect — a gap that surprises both parties.
+- Haram as comprehensive system: not just "forbidden food" but a complete moral-legal framework covering slaughter method, alcohol in cooking, cross-contamination.
+
+Key asymmetric concepts — Bengali speakers know, Arabs may not:
+- Lajja (লজ্জা): shame/modesty with a positive valence when displayed — signals appropriate modesty, not disgrace. Not equivalent to Arabic 'aar.
+- Adda (আড্ডা): extended, unstructured intellectual conversation as a cultivated social practice. No Arab equivalent.
+- Pir/Murshid: Sufi teacher/saint with hereditary devotional authority — not the same as an Arab sheikh. Shrine-visiting (urs) may be seen as bid'a by Gulf Arabs.
+- Bengali Islam is Sufi-syncretic (Baul tradition, shrine veneration, Persian-derived ritual vocabulary like namaz instead of salah). Gulf Arab Islam treats some of this as bid'a.
+- Ekushey/Language Martyrs (Feb 21): the foundational identity myth of Bangladeshi nationhood. Any Bengali expects this reference to be understood.
+
+Key terms requiring bridging:
+- Inshallah: explain as genuine theistic deference, not "maybe"
+- Namaz (নামাজ): the Bengali/Persian word for prayer — Arab may not recognize it
+- Pir: Sufi saint with hereditary authority — not equivalent to sheikh
+- Lajja: no single Arabic equivalent; context-dependent (haya/khajal/aar)
+- Adda: "intimate extended intellectual conversation," not small talk
+- Wasta: Bengali approximate is joruri manush, lacks institutionalized status""",
+
+    "ar-id": """\
+Cultural asymmetries for Arabic ↔ Indonesian interpretation:
+
+Communication style: Arabic communication is expressive, assertive, and uses volume variation and repetition for emphasis — this reads as conflict or anger in Indonesian (especially Javanese) contexts. Indonesian communication is built around rukun (active social harmony maintenance) and face-saving. Saying "yes" (iya) in Indonesian may only mean "I hear you," not agreement. Indonesians use belum ("not yet"), sulit ("difficult"), nanti ("later") as indirect refusals — an Arab interpreting these as honest answers will be repeatedly frustrated.
+
+Key asymmetric concepts — Arabic speakers know, Indonesians may not:
+- Wasta: legitimate connection-based access, not corruption.
+- Kafala system: Gulf employer-sponsorship for migrant workers — Arabs experience it as employers; Indonesians who have worked in the Gulf know it as a feared lived reality.
+- Fusha/ammiya diglossia: pesantren-educated Indonesian Arabic speakers know Quranic Arabic but cannot understand spoken Gulf/Egyptian dialect.
+- Gender separation norms: in conservative Gulf contexts, unrelated men and women are not expected to interact professionally — Indonesian mixed-gender workplaces will surprise Arab visitors.
+
+Key asymmetric concepts — Indonesian speakers know, Arabs may not:
+- Rukun: social harmony as an ACTIVE obligation — suppressing disagreement and maintaining smooth surfaces is the social contract, not mere politeness.
+- Gotong royong: communal labor obligation — neighbors participate in each other's weddings/funerals/building projects as natural communal duty.
+- Malu: shame/embarrassment as a pervasive social regulator; closer to Chinese mianzi than Arabic 'aar. Context-positive when signaling modesty.
+- Selamatan: communal feast combining Quranic prayer with pre-Islamic ancestral invocations — Gulf Arabs would classify some elements as bid'a/shirk.
+- Pesantren: Indonesia's ~26,000 Islamic boarding schools have a kyai (traditional scholar) whose authority derives from lineage and social embeddedness, not formal state certification.
+- Halal certification gap: Arabs treat halal as baseline default; Indonesians treat it as a verifiable, certifiable status (BPJPH) because they live in a pluralistic food environment.
+- Haji/Hajjah as permanent social title in Indonesia: completing Hajj grants a lifelong honorific. Not the case in Arab countries near Mecca.
+
+Key terms requiring bridging:
+- Inshallah → insya Allah (Indonesian): used in stronger literal divine-will register, not routinely as soft refusal
+- Rukun: "active social harmony," not just "peace"
+- Malu: shame-modesty; positive when signaling appropriate restraint
+- Jam karet: "rubber time" — culturally endorsed temporal flexibility
+- Selamatan: syncretic ritual feast; requires explanation of pre-Islamic elements
+- Kyai: traditional scholar with lineage-based authority; not equivalent to Arab sheikh
+- Halal certification: verify, not assume, in Indonesian context""",
+
+    "ar-ko": """\
+Cultural asymmetries for Arabic ↔ Korean interpretation:
+(These cultures have minimal historical contact — asymmetries are especially large.)
+
+Communication style: Arabic fills silence with conversation, uses emotional expressiveness and repetition for emphasis. Korean nunchi (눈치) — reading unspoken social cues — is a foundational skill; explicitly stating needs signals low social awareness. Korean silence after a question can signal "no" or discomfort. Kibun (기분, collective mood) must be protected; stating an uncomfortable truth damages kibun and is a social violation. An Arab's assertive style is likely to damage kibun; a Korean's silence and indirect deflection will be misread as evasion by an Arab.
+
+Key asymmetric concepts — Arabic speakers know, Koreans may not:
+- Inshallah: not "maybe" — sincere theological acknowledgment that the future is in God's hands. Koreans (~96% don't know what halal means) will misread this as non-commitment.
+- Halal/haram as system: comprehensive legal-ethical framework covering slaughter method, cross-contamination, cooking alcohol, additives — far beyond "no pork."
+- Ramadan restructuring: an entire month that reshapes business hours, meeting availability, and daily schedule. No Korean equivalent calendar disruption.
+- Gender separation norms: in conservative Gulf contexts, unrelated men and women do not professionally interact — unexpected to Koreans.
+- Wasta: connection-based access as legitimate social capital.
+
+Key asymmetric concepts — Korean speakers know, Arabs may not:
+- Nunchi (눈치): the ability to read unspoken social atmosphere — a core social competency. Its absence is a major social failing.
+- Kibun (기분): collective mood that must be managed; damaging it even accidentally is a social error.
+- Ppalli-ppalli (빨리빨리): urgency culture — speed and efficiency are moral virtues; Arab temporal flexibility reads as unreliability.
+- Hoesik (회식): mandatory workplace alcohol-bonding dinners; refusing or leaving early signals disloyalty. Completely incompatible with practicing Muslim's constraints — a genuine structural inclusion barrier.
+- Seonbae/hoobae (선배/후배): rigid age-based senior/junior hierarchy governing speech registers. Addressing a Korean by first name without permission is rude.
+- Chemyeon (체면): public face/dignity as social currency; deep distress when lost.
+- Jeong (정): deep relational bond accumulated over shared time — creates obligation, not just warmth.
+
+Key terms requiring bridging:
+- Inshallah: genuine divine deference, not evasion; explain as "I sincerely intend this, God willing"
+- Halal/haram: comprehensive system, not just pork prohibition
+- Ramadan: explains daytime unavailability and schedule restructuring for a full month
+- Nunchi: "reading the room" — indirect signals replace direct speech
+- Kibun: mood that must be protected; disrupting it is a social error
+- Hoesik: mandatory company drinking — impossible for observant Muslim; interpreter must provide face-saving reformulation
+- Ppalli-ppalli: Korean urgency culture — slow responses read as disrespect""",
+
+    "bn-id": """\
+Cultural asymmetries for Bengali ↔ Indonesian interpretation:
+
+Communication style: Bengali is emotionally expressive and argument-comfortable — adda culture values vigorous intellectual debate as a social good. Indonesian (especially Javanese) is built around rukun (active harmony maintenance) and malu (shame as regulator). A Bengali engaging in vigorous debate reads as aggressive to a Javanese Indonesian; an Indonesian's indirect belum/sulit/nanti ("not yet"/"difficult"/"later") reads as honest uncertainty to a Bengali, when it is actually a polite "no." Both are Muslim-majority but different enough in Islamic practice that shared vocabulary masks deep practice differences.
+
+Key asymmetric concepts — Bengali speakers know, Indonesians may not:
+- Adda (আড্ডা): extended, unstructured intellectual conversation as a cultivated social practice — a core Bengali social form. Indonesians may find it disorganized or pointless.
+- Partition memory (1947 and 1971): the Language Movement and Liberation War genocide are foundational to Bangladeshi identity. Any Bengali will expect these references to be understood; an Indonesian has no framework for them.
+- Bhadralok: educated, reform-minded Bengali cultural elite defined by literary engagement and secular-nationalist sensibility; often skeptical of Gulf-style orthodoxy.
+- Obhiman (Bengali): wounded expectation/silent relational hurt felt toward someone close — neither accusatory nor angry, it expects recognition. No Indonesian equivalent.
+- Bengali Islam is Sufi-syncretic (Baul tradition, pir devotion, Persian ritual vocabulary). Indonesian Islam Nusantara is also syncretic but on a Hindu-Buddhist-Animist substrate. A Tablighi-influenced Bangladeshi may find Indonesian syncretism insufficient; an Indonesian may find Bangladeshi Tablighi pietism unnecessarily rigid.
+
+Key asymmetric concepts — Indonesian speakers know, Bengalis may not:
+- Rukun: social harmony as an ACTIVE obligation — not just being nice but a structural duty to suppress disagreement.
+- Gotong royong: institutionalized communal labor obligation — neighbors participate in each other's events as natural social order.
+- Malu: shame as behavior-governor — explains reluctance to speak up, correct others publicly, or stand out inappropriately.
+- Jam karet: culturally endorsed temporal flexibility — not disrespect but an explicit named social norm.
+- Selamatan: communal feast combining Quranic prayer with pre-Islamic ancestral elements — a Tablighi-influenced Bengali would classify parts as bid'a.
+- Islam Nusantara: deliberate framing of Indonesian Islam as contextually inclusive of local adat — structurally different from Bangladeshi Islamic approaches.
+- Pancasila: the national ideology of managed religious pluralism — explains why Indonesian Muslims do not demand religious monism in public life.
+
+Key terms requiring bridging:
+- Adda: "leisurely extended intellectual conversation as social practice" — not mere chatting
+- Obhiman: wounded relational expectation — no Indonesian equivalent; must be paraphrased
+- Lojja (লজ্জা): shame/modesty; similar to malu but expressed more verbally/emotionally than behaviorally
+- Rukun: active social harmony obligation, not passive goodwill
+- Malu: shame as behavior-governor — explains indirect communication patterns
+- Belum/Nanti/Sulit: indirect refusal signals — interpreter must bridge as "no" explicitly
+- Selamatan: syncretic communal ritual; requires explanation of pre-Islamic elements""",
+
+    "bn-ko": """\
+Cultural asymmetries for Bengali ↔ Korean interpretation:
+(These cultures have minimal historical contact — asymmetries are significant.)
+
+Communication style: Bengali is emotionally expressive, argument-comfortable, and literary in register. Korean is hierarchically indirect — nunchi (reading unspoken social cues) is a core competency, and kibun (collective mood) must be protected at all times. When a Bengali asks a direct "yes or no" question, a Korean's indirect hedge-filled non-answer means "no" — a Bengali will miss this. Korean silence signals discomfort or disagreement; a Bengali reads silence as thinking. Bengali emotional expressiveness reads as excessive to Koreans; Korean emotional restraint reads as cold to Bengalis.
+
+Key asymmetric concepts — Bengali speakers know, Koreans may not:
+- Adda (আড্ডা): extended leisurely intellectual conversation as a social form — no Korean equivalent.
+- Obhiman (অভিমান): wounded expectation / silent relational hurt — neither accusatory nor angry, expects recognition. No Korean equivalent.
+- Bhadralok: specific colonial-era cultural elite identity defined by literary refinement and secular-nationalist sensibility.
+- Partition trauma (1947 and 1971): foundational Bengali/Bangladeshi identity wound. No Korean framework for this.
+- Halal requirements: Bengali Muslims have comprehensive halal constraints (slaughter, cross-contamination, additives) — Korean default is pork-and-alcohol-heavy social culture, which is doubly incompatible.
+- K-wave asymmetry: Korean pop culture (Hallyu) has massive reach in Bangladesh; Koreans have almost no awareness of Bengali culture.
+
+Key asymmetric concepts — Korean speakers know, Bengalis may not:
+- Nunchi (눈치): reading unspoken social atmosphere — core social competency; its absence is a major failing.
+- Kibun (기분): collective mood that must be managed; disrupting it is a social error.
+- Chemyeon (체면): public face/dignity as social currency; deep distress when damaged.
+- Ppalli-ppalli (빨리빨리): urgency as moral virtue — slow responses carry social cost.
+- Hoesik (회식): mandatory company alcohol-bonding dinners — career consequences for refusal; impossible for observant Muslims. Interpreter must provide face-saving reformulation.
+- Jeong (정): deep relational bond built over time — creates mutual obligation, not just warmth.
+- Jesa (제사): ancestral memorial rites — immovable family obligation practiced across religious identities. No Bengali/Muslim equivalent.
+- Korean speech levels: systematic grammatical hierarchy in every utterance. Addressing a Korean by first name is disrespectful without explicit permission.
+
+Key terms requiring bridging:
+- Adda: extended intellectual social conversation — not small talk
+- Obhiman: wounded relational expectation — no Korean equivalent; must be paraphrased with emotional context
+- Lajja (লজ্জা): shame/modesty — structurally similar to chemyeon but more familial/communal
+- Halal: comprehensive system (slaughter, cross-contamination, additives) — Korean default assumes none of this
+- Nunchi: reading the room without being told — Korean core social competency
+- Kibun: collective mood requiring protection — disrupting it is a social violation
+- Hoesik: mandatory work drinking — explain that refusal is socially costly but impossible for observant Muslim
+- Jesa: ancestral rites — immovable family calendar obligation; signals filial piety ethic""",
+
+    "id-ko": """\
+Cultural asymmetries for Indonesian ↔ Korean interpretation:
+(The most culturally load-bearing pair in this project.)
+
+Communication style: Indonesian (especially Javanese) indirectness is horizontal — it preserves social harmony and avoids imposing. Korean indirectness is vertical — it protects hierarchical order and kibun. Both avoid direct refusal, but differently: Indonesian "tidak enak" (literally "not comfortable/delicious") = "I cannot"; Indonesian belum/nanti/sulit = "no" delivered with maximum face-preservation. Korean "I'll think about it" or prolonged silence also means "no." An Indonesian saying "yes" (iya) may mean "I hear you," not agreement. An Indonesian asking a Korean's age is establishing connection; the Korean is calculating which speech level to use.
+
+Key asymmetric concepts — Indonesian speakers know, Koreans may not:
+- Rukun: social harmony as an ACTIVE obligation — not just "no conflict" but the positive cultivation of cooperative, caring social relations. Underlies how Indonesian communities manage all public interactions.
+- Gotong royong: institutionalized communal labor — enshrined in Pancasila; no Korean equivalent.
+- Malu: shame-embarrassment as pervasive regulator — may prevent an Indonesian employee from reporting a problem to their supervisor even when they know the solution.
+- Sungkan: respectful reluctance to impose on or inconvenience others, especially superiors. An Indonesian who repeatedly says "no need, it's fine" while clearly needing help is practicing sungkan — requires gentle insistence.
+- Tidak enak: "I feel uncomfortable" = indirect refusal; NOT a comment about food.
+- Musyawarah: consensus through deliberation — Indonesian decisions require group agreement, which explains slow and opaque decision-making to Korean interlocutors.
+- Halal as DEFAULT (not special request): Indonesian Muslims do not ask for halal as a preference — it is the baseline non-negotiable condition. An Indonesian Muslim cannot eat samgyeopsal (pork belly), drink soju, or eat kimchi with pork-broth base.
+- Nasi tumpeng: ceremonial cone-shaped rice — its presence at an event signals formality, celebration, and spiritual significance; not merely "interesting food."
+- Batik: UNESCO 2009 heritage textile — wearing it at formal events carries identity significance.
+
+Key asymmetric concepts — Korean speakers know, Indonesians may not:
+- Nunchi (눈치): reading unspoken social atmosphere — core social competency. Absence is a major social failing.
+- Kibun (기분): collective mood requiring protection; disrupting it is a social violation.
+- Ppalli-ppalli (빨리빨리): urgency as cultural virtue — slow responses and deliberative processes read as disrespect.
+- Hoesik (회식): mandatory company alcohol-bonding dinners — career consequences for refusal. For Indonesian Muslim employees in Korean workplaces, this is a genuine structural inclusion crisis, not a personal preference.
+- Jeong (정): deep relational bond built through shared time and shared meals — an Indonesian who avoids all hoesik may prevent jeong from forming, creating persistent social distance.
+- Chemyeon (체면): public face/dignity — governs modesty performances (downplaying achievement) and conflict avoidance.
+- Jesa (제사): ancestral memorial rites — immovable family calendar obligation practiced across religions.
+- Korean speech levels: systematic grammatical hierarchy. Addressing a Korean by first name without permission is disrespectful.
+- K-wave asymmetry: Indonesians often arrive with K-drama-mediated impressions of Korea that are both informed and distorted; Koreans have almost no reciprocal awareness of Indonesian culture.
+
+Key terms requiring bridging:
+- Rukun: "active social harmony," not just peace — requires cultivation
+- Gotong royong: communal cooperative labor — institutionalized in national ideology
+- Malu: shame as behavior-governor; explains reluctance to speak up or stand out
+- Sungkan: respectful reluctance to impose — means "I hold back out of respect," not "I don't want"
+- Tidak enak: "I feel uncomfortable" = indirect refusal; must be bridged as "no"
+- Musyawarah: consensus deliberation — explains why Indonesian decisions seem slow to Koreans
+- Halal: non-negotiable baseline for Indonesian Muslims — extends far beyond "no pork and no alcohol"
+- Nasi tumpeng: ceremonial dish; its presence signals a formal/spiritual occasion
+- Nunchi: reading unspoken social atmosphere — core Korean social competency
+- Kibun: collective mood that must be protected
+- Hoesik: mandatory company drinking — explain that refusal has career consequences but is religiously impossible for observant Muslim; interpreter must provide face-saving alternative framing
+- Ppalli-ppalli: Korean urgency culture — slow responses read as disrespect, not thoughtfulness
+- Jeong: deep relational bond built over time; explains why hoesik avoidance has relational consequences""",
+}
+
+# Maps mining-pipeline reason tags to actionable evaluation hint text.
+# Unmapped tags are shown as-is (no hint).
+FEATURE_HINT_MAP: Dict[str, str] = {
+    # ── Arabic-specific ──────────────────────────────────────────────────────
+    "ar_negation": (
+        "Source uses Arabic negation (lā/mā/lan/lam); check that the pragmatic force "
+        "(denial, prohibition, soft refusal, hedging) is preserved — not just the grammar."
+    ),
+    "ar_clitic_negation": (
+        "Source uses Arabic clitic negation (e.g., -sh in Egyptian/Levantine); "
+        "verify the colloquial negation is rendered with appropriate register in the target."
+    ),
+    "ar_colloquial": (
+        "Source is in Arabic colloquial/dialect register (not fusha); "
+        "check whether the colloquial intimacy, informality, or regional marking is preserved or appropriately adapted."
+    ),
+    "ar_conditional": (
+        "Source contains an Arabic conditional (law/in/idha); "
+        "check that the conditionality and implied hypothetical or warning force are preserved."
+    ),
+    "ar_dialect_present_prefix": (
+        "Source uses Arabic dialect present-tense prefix (b-/bi-), marking spoken register; "
+        "verify register and dialectal informality are reflected in the target."
+    ),
+    "ar_discourse_marker": (
+        "Source uses an Arabic discourse marker (yʿani/hallas/tayeb/masalan); "
+        "check that the connective or hedging function is preserved, not literally translated."
+    ),
+    "ar_intensifier": (
+        "Source uses an Arabic intensifier (jiddan/kathiran/wallah); "
+        "check that the emotional emphasis or oath-like force is conveyed at an appropriate level in the target."
+    ),
+    "ar_relative_clause": (
+        "Source uses an Arabic relative clause (alladhi/allati); "
+        "check that the referential scope and any implied specificity are preserved in the target structure."
+    ),
+    "ar_request_marker": (
+        "Source uses an Arabic request marker (min fadlak/rajāʾan/law samaḥt); "
+        "check that the politeness level and face-saving function of the request are preserved in the target."
+    ),
+    # ── Bengali-specific ────────────────────────────────────────────────────
+    "bn_honorific": (
+        "Source uses Bengali honorific address (apni/tumi/tui or kinship terms like dada/didi/bhai); "
+        "check that the social relationship and hierarchy encoded are preserved in the target language's address system."
+    ),
+    "bn_negation": (
+        "Source uses Bengali negation (na/nei/noy); "
+        "check that the pragmatic function (outright denial, soft refusal, existential negation) is preserved."
+    ),
+    "bn_discourse_marker": (
+        "Source uses a Bengali discourse marker (tobe/kintu/tai/aar); "
+        "check that the contrastive, additive, or conclusive function is preserved."
+    ),
+    "bn_echo_reduplication": (
+        "Source uses Bengali echo-reduplication (e.g., 'chaay-taay', 'khaoa-daoa'); "
+        "check that the generalization or vagueness effect ('tea or something', 'eating and all') is conveyed."
+    ),
+    # ── Indonesian-specific ─────────────────────────────────────────────────
+    "id_affix_complexity": (
+        "Source uses Indonesian complex affixation (meN-/di-/ber-/ter-/ke-an/peN-an); "
+        "check that the voice, focus, or aspect shift encoded in the affix is preserved in the target."
+    ),
+    "id_reduplication": (
+        "Source uses Indonesian reduplication (jalan-jalan, anak-anak, sayur-mayur); "
+        "check that the plurality, variety, or intensity meaning is preserved — not read as a single-word repetition."
+    ),
+    "id_slang_or_colloquial": (
+        "Source uses Indonesian slang or colloquial form (lo/gue, nggak, udah, dll.); "
+        "check that the informal register and in-group signal are preserved or appropriately adapted."
+    ),
+    "id_soft_discourse_marker": (
+        "Source uses a soft Indonesian discourse marker (sih, deh, dong, kok); "
+        "these are face-saving particles that soften requests or signal frustration — check that their pragmatic function is preserved."
+    ),
+    "id_strong_discourse_marker": (
+        "Source uses a strong Indonesian discourse marker (kan, lah, toh, memang); "
+        "these signal assertion, shared knowledge, or mild challenge — check that the rhetorical stance is preserved."
+    ),
+    # ── Korean-specific ─────────────────────────────────────────────────────
+    "ko_honorific_or_social_marker": (
+        "Source uses Korean speech-level or honorific marking (formal -습니다, polite -아요/어요, informal -아/어, intimate -야/아); "
+        "check that the exact speech level and relational stance are preserved in the target — this is non-optional in Korean."
+    ),
+    "ko_complex_verb_ending": (
+        "Source uses a Korean complex verb ending (-(으)ㄹ게요, -겠-, -(으)ㄹ 것 같다, 아/어야 하다); "
+        "check that the modality (volition, conjecture, obligation) is preserved, not flattened to a simple statement."
+    ),
+    "ko_sentence_ending_particle": (
+        "Source uses a Korean sentence-ending particle (요, 죠, 네, 군, 지); "
+        "check that the discourse function (confirmation-seeking, new information, shared knowledge) is preserved."
+    ),
+    "ko_colloquial_expression": (
+        "Source uses Korean colloquial expression (애, 걔, 뭐, 어, 진짜); "
+        "check that the casual register and in-group familiarity are preserved or adapted appropriately."
+    ),
+    "ko_subject_topic_omission_likely": (
+        "Source likely omits subject/topic (pro-drop); "
+        "check that the referent is correctly recovered and the implied subject is consistent with the surrounding context."
+    ),
+    # ── Cross-language structural ─────────────────────────────────────────────
+    "negation": (
+        "Source contains negation; check that the pragmatic force (denial, prohibition, soft refusal, hedging) "
+        "is preserved in the target — not just the grammatical negation structure."
+    ),
+    "question": (
+        "Source is a question; check the speech act type (genuine inquiry, rhetorical, indirect request, challenge) "
+        "and whether the question force is preserved in the target."
+    ),
+    "request_or_imperative": (
+        "Source contains a request or imperative; check that the directness level and face-saving strategy "
+        "are appropriate for the target culture's norms around making requests."
+    ),
+    "exclamation": (
+        "Source is an exclamation; check that the emotional register and intensity are preserved — "
+        "not over-formalized or under-expressed in the target."
+    ),
+    "ellipsis": (
+        "Source relies on ellipsis or pragmatic omission; check that the implied meaning is fully "
+        "recoverable in the target from context, especially where the target language requires more explicit marking."
+    ),
+    "pronoun_asymmetry": (
+        "Source-target pronoun systems are asymmetric; check that person, number, and honorific/social "
+        "relationships encoded in pronouns are correctly mapped to the target's address system."
+    ),
+    "multi_clause_or_turn": (
+        "Source spans multiple clauses or turn units; check that all logical and pragmatic relationships "
+        "between clauses (cause, contrast, condition, sequence) are preserved in the target."
+    ),
+    "digit_mismatch": (
+        "Source and target have mismatched digit/number representation; "
+        "verify that numbers are correctly transferred and any unit or currency localization is appropriate."
+    ),
+    "qmark_mismatch": (
+        "Question mark count or placement differs between source and target; "
+        "verify that the interrogative force is preserved as intended."
+    ),
+    "exclaim_mismatch": (
+        "Exclamation mark usage differs between source and target; "
+        "verify that the emotional intensity and expressiveness are preserved."
+    ),
+}
+
+
+def _expand_reason_hints(tags: List[str]) -> str:
+    """Map reason tags to hint text; unmapped tags shown as-is."""
+    lines: List[str] = []
+    for tag in tags:
+        hint = FEATURE_HINT_MAP.get(tag)
+        if hint:
+            lines.append(f"• [{tag}] {hint}")
+        else:
+            lines.append(f"• [{tag}]")
+    return "\n".join(lines) if lines else "(none)"
+
 
 HINT_PATTERNS = [
     r"be ready to",
@@ -73,8 +440,8 @@ def _normalize_generated_fields(raw: Dict[str, Any]) -> Dict[str, Any]:
     checklist = raw.get("checklist")
     if not isinstance(checklist, dict):
         checklist = {}
-
     return {
+        "pragmatic_analysis": _as_string(raw.get("pragmatic_analysis")),
         "speech_act_intent": _as_string(raw.get("speech_act_intent")),
         "semantic_core": _as_string(raw.get("semantic_core")),
         "mandatory_cultural_constraints": _as_string_list(
@@ -99,62 +466,88 @@ def _normalize_generated_fields(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-PROMPT_TEMPLATE = """You are an expert MT evaluation data designer.
+PROMPT_TEMPLATE = """You are an expert evaluation data designer for cross-cultural interpreter-mediated communication.
 
-You will convert bilingual subtitle-window data into evaluation metadata for one-turn interpretation simulation.
+Your task: convert a bilingual subtitle segment into structured evaluation metadata for a one-turn interpretation simulation.
 
-Direction:
-- source language: {source_language} ({source_language_code})
-- target language: {target_language} ({target_language_code})
+Direction: {source_language} ({source_language_code}) → {target_language} ({target_language_code})
 
-Source turn:
+{cultural_context_block}Source turn (what the interpreter receives):
 {source_text}
 
-Reference target turn (for understanding constraints only, do not copy mechanically):
+Reference target turn (pragmatic reference only — not ground truth):
 {reference_target_text}
+{reference_alignment_note}
 
-Complexity reason tags from mining pipeline:
-{reason_tags}
+Detected linguistic features and their evaluation implications:
+{reason_tags_block}
 
-Context window digest (critical, must be reflected in outputs):
+Context digest (must be reflected in outputs):
 {context_digest}
 
 Previous context window:
 {prev_context}
 
-Task requirements:
-1) Infer speech_act_intent and semantic_core from source + context.
-2) Produce mandatory_cultural_constraints as concrete translator constraints (pragmatic, register, politeness, discourse, implicit assumptions, or culturally-bound adaptation).
-3) Build roleplay-ready contexts while de-identifying movie specifics.
-4) Do not include actor names, film titles, or scene-specific lore in conversation_context, user_a_context, or user_b_context.
-5) user_a_context must be in source language. user_b_context must be in target language.
-6) Produce checklist layers where YES means success.
-7) Enforce checklist priority: layer_3 count >= layer_2 count >= layer_1 count.
-8) conversation_context must be grounded in previous context window only, but must not quote or enumerate transcript-style turn history.
-9) Do not include the current source turn inside conversation_context, context_window_summary, user_a_context, or user_b_context.
-10) Add context_window_summary as 2-4 English sentences focused only on previous context window.
-11) Both user contexts must be fully written in each user's language and provide rich role/situation grounding inferred from previous context (identity, relationship, setting, emotional stance when inferable) without exposing exact past utterances.
-12) user_a_context must explicitly state that the user is User A (source-side user); user_b_context must explicitly state that the user is User B (target-side user).
-13) Do not include guidance phrasing like "Saya harus", "Saya akan", "I must", "I will", "해야", or "할 거".
+════════════════════════════════════════════════════
+STEP 1 — Pragmatic analysis (reason before generating)
+════════════════════════════════════════════════════
+
+Analyze the source turn and produce a compact analysis covering ALL of:
+A. Speech act: primary communicative act (request / refusal / apology / assertion / question / complaint / promise / greeting / challenge / other)
+B. Social relationship: power/solidarity dynamic presupposed (superior→subordinate / peer / subordinate→superior / stranger / intimate / etc.)
+C. Face stakes: is there a face-threatening act? What mitigation does the source culture use, and what does the target culture expect instead?
+D. Cultural failure points: given the pair-specific asymmetries above, name 2–3 concrete ways this specific utterance could fail in translation — grounded in the actual cultural gap, not generic errors.
+E. Required target form: what register, honorific level, and grammatical form must the target use?
+
+Output this as "pragmatic_analysis": a 3–5 sentence paragraph that a human judge could use to evaluate the translation.
+
+════════════════════════════════════════════════════
+STEP 2 — Generate all output fields
+════════════════════════════════════════════════════
+
+Using your Step 1 analysis, generate all fields below.
+
+CHECKLIST FORMAT RULE — mandatory for every item:
+Every checklist item must be a yes/no question starting with "Does the" targeting:
+• "Does the translation ..."         — Layer 1: fidelity and semantic accuracy
+• "Does the interpreter's response ..." — Layers 2 & 3: pragmatic function and communicative goal
+
+The distinction matters: Layer 1 checks whether the translation is *accurate*. Layers 2–3 check whether the interpreter's *response achieves its communicative goal* in the target cultural context — which may require culturally-adapted choices beyond word-for-word accuracy.
+
+TASK REQUIREMENTS:
+1)  Infer speech_act_intent (≤8 words) and semantic_core from source + context.
+2)  Produce mandatory_cultural_constraints grounded in Step 1 cultural failure points (D).
+3)  Build roleplay-ready contexts while de-identifying movie specifics.
+4)  Do not include actor names, film titles, or scene-specific lore.
+5)  user_a_context must be in source language. user_b_context must be in target language.
+6)  Checklist items must use the "Does the translation/interpreter's response ..." format (YES = success).
+7)  Enforce checklist priority: layer_3 count >= layer_2 count >= layer_1 count.
+8)  conversation_context must be grounded in previous context window only; no transcript-style turn history.
+9)  Do not include the current source turn in conversation_context, context_window_summary, or user contexts.
+10) context_window_summary: 2–4 English sentences about previous context only.
+11) Both user contexts: rich role/situation grounding in each user's language without exposing past utterances.
+12) user_a_context must explicitly identify User A (source-side); user_b_context must identify User B (target-side).
+13) Do not include guidance phrasing: "Saya harus/akan", "I must/will", "해야", "할 거".
 14) Do not include target-side plans, expected replies, or strategy hints in user_b_context.
-15) verification_prompt must be numbered lines (1., 2., ...).
+15) verification_prompt: numbered lines (1., 2., ...).
 16) Checklist must include at least one criterion for contextual coherence with surrounding turns.
-17) Use reference_target_text only as a soft pragmatic reference, not strict ground truth; do not suggest future responses.
+17) layer_3 must include at least one criterion grounded in the Step 1 cultural failure points (D).
 
 Output JSON only with this schema:
 {{
+  "pragmatic_analysis": "string",
   "speech_act_intent": "string",
   "semantic_core": "string",
   "mandatory_cultural_constraints": ["string"],
-    "context_window_summary": "string",
+  "context_window_summary": "string",
   "conversation_context": "string",
   "user_a_context": "string",
   "user_b_context": "string",
-    "checklist": {{
-    "layer_1_semantic_core": ["string"],
-    "layer_2_pragmatic_function": ["string"],
-    "layer_3_cultural_social_constraints": ["string"]
-    }},
+  "checklist": {{
+    "layer_1_semantic_core": ["Does the translation ..."],
+    "layer_2_pragmatic_function": ["Does the interpreter's response ..."],
+    "layer_3_cultural_social_constraints": ["Does the interpreter's response ..."]
+  }},
   "verification_prompt": "string"
 }}
 """
@@ -164,7 +557,6 @@ def _load_env_file(repo_root: Path) -> None:
     env_path = repo_root / ".env"
     if not env_path.exists():
         return
-
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -180,7 +572,6 @@ def _load_env_file(repo_root: Path) -> None:
 def _load_env(repo_root: Path) -> None:
     try:
         from dotenv import load_dotenv  # type: ignore
-
         load_dotenv(repo_root / ".env")
     except Exception:
         _load_env_file(repo_root)
@@ -200,11 +591,11 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def _load_existing_keys(path: Path) -> Set[Tuple[str, str]]:
-    keys: Set[Tuple[str, str]] = set()
+def _load_existing_keys(path: Path) -> Set[Tuple[str, str, str]]:
+    """Keys are (segment_file, segment_id, direction_label) to allow both directions per row."""
+    keys: Set[Tuple[str, str, str]] = set()
     if not path.exists():
         return keys
-
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             text = line.strip()
@@ -216,13 +607,13 @@ def _load_existing_keys(path: Path) -> Set[Tuple[str, str]]:
                 continue
             seg_file = str(obj.get("segment_file", ""))
             seg_id = str(obj.get("segment_id", ""))
+            direction = str(obj.get("direction", ""))
             if seg_file or seg_id:
-                keys.add((seg_file, seg_id))
-
+                keys.add((seg_file, seg_id, direction))
     return keys
 
 
-def _iter_context(ctx: Iterable[Dict[str, Any]]) -> List[str]:
+def _iter_context(ctx: List[Dict[str, Any]]) -> List[str]:
     lines: List[str] = []
     for r in ctx:
         sid = r.get("segment_id", "")
@@ -232,18 +623,6 @@ def _iter_context(ctx: Iterable[Dict[str, Any]]) -> List[str]:
     return lines
 
 
-def _ctx_source_text(ctx_row: Dict[str, Any], direction: str) -> str:
-    if direction == "id_kor":
-        return _as_string(ctx_row.get("source_text", ""))
-    return _as_string(ctx_row.get("target_text", ""))
-
-
-def _ctx_target_text(ctx_row: Dict[str, Any], direction: str) -> str:
-    if direction == "id_kor":
-        return _as_string(ctx_row.get("target_text", ""))
-    return _as_string(ctx_row.get("source_text", ""))
-
-
 def _shorten(text: str, max_chars: int = 140) -> str:
     text = " ".join((text or "").split())
     if len(text) <= max_chars:
@@ -251,22 +630,17 @@ def _shorten(text: str, max_chars: int = 140) -> str:
     return text[: max_chars - 3].rstrip() + "..."
 
 
-def _build_context_digest(row: Dict[str, Any], direction: str) -> str:
+def _build_context_digest(row: Dict[str, Any], is_fwd: bool) -> str:
     prev_ctx = row.get("prev_context", []) or []
-    current_source = (
-        _as_string(row.get("source_text", ""))
-        if direction == "id_kor"
-        else _as_string(row.get("target_text", ""))
+    current_source = _as_string(
+        row.get("source_text" if is_fwd else "target_text", "")
     )
-
-    prev_source = [_ctx_source_text(x, direction) for x in prev_ctx]
-
+    src_field = "source_text" if is_fwd else "target_text"
+    prev_source = [_as_string(x.get(src_field, "")) for x in prev_ctx]
     lead_up_last = [_shorten(x) for x in prev_source[-3:] if x]
-
     first_prev = _shorten(prev_source[0]) if prev_source else "(none)"
     latest_prev = _shorten(prev_source[-1]) if prev_source else "(none)"
     current_source_short = _shorten(current_source) if current_source else "(none)"
-
     return (
         f"prev_turn_count={len(prev_ctx)}\n"
         f"first_prev_source_turn={first_prev}\n"
@@ -276,175 +650,41 @@ def _build_context_digest(row: Dict[str, Any], direction: str) -> str:
     )
 
 
-def _fallback_context_window_summary(row: Dict[str, Any], direction: str) -> str:
-    prev_ctx = row.get("prev_context", []) or []
+def _fallback_context_window_summary(row: Dict[str, Any]) -> str:
+    n = len(row.get("prev_context", []) or [])
     return (
-        f"The prior context window contains {len(prev_ctx)} turns that shape the immediate interaction conditions. "
+        f"The prior context window contains {n} turns that shape the immediate interaction conditions. "
         "It provides grounding from earlier dialogue only, without predicting upcoming actions or replies."
     )
 
 
-def _fallback_conversation_context(row: Dict[str, Any], direction: str) -> str:
-    prev_ctx = row.get("prev_context", []) or []
+def _fallback_conversation_context(row: Dict[str, Any]) -> str:
+    n = len(row.get("prev_context", []) or [])
     reason_tags = _extract_reason_tags(row)
-    reason_text = (
-        ", ".join(reason_tags[:3]) if reason_tags else "local pragmatic continuity"
-    )
+    reason_text = ", ".join(reason_tags[:3]) if reason_tags else "local pragmatic continuity"
     return (
-        f"The interaction is already in progress with {len(prev_ctx)} earlier turns. "
+        f"The interaction is already in progress with {n} earlier turns. "
         f"The current source utterance should be interpreted with {reason_text} carried from prior dialogue state. "
         "This context is grounding only and does not imply what either user will say next."
     )
 
 
-def _fallback_user_a_context(row: Dict[str, Any], direction: str) -> str:
-    prev_ctx = row.get("prev_context", []) or []
-
-    if direction == "id_kor":
-        return (
-            f"Percakapan sudah berlangsung {len(prev_ctx)} giliran sebelum ujaran saat ini. "
-            "Anda adalah penutur sumber dalam interaksi berjalan, dengan latar relasi, emosi, dan tingkat formalitas yang dibentuk oleh konteks sebelumnya. "
-            "Informasi ini dipakai untuk menjaga kesinambungan makna tanpa memproyeksikan giliran berikutnya."
-        )
-
+def _fallback_user_a_context(row: Dict[str, Any]) -> str:
+    n = len(row.get("prev_context", []) or [])
     return (
-        f"현재 발화 이전에 {len(prev_ctx)}개의 발화가 이어진 상태입니다. "
-        "당신은 원문 사용자로서 이전 맥락에서 형성된 관계, 정서, 발화 톤, 공손성 수준을 인식하고 있습니다. "
-        "이 정보는 의미 연속성 파악을 위한 배경이며 다음 반응 예측은 포함하지 않습니다."
+        f"User A (source-side speaker): The conversation has {n} prior turns "
+        "establishing the relationship, register, and emotional tone. "
+        "This grounding informs the current utterance without projecting future turns."
     )
 
 
-def _fallback_user_b_context(row: Dict[str, Any], direction: str) -> str:
-    prev_ctx = row.get("prev_context", []) or []
-    if direction == "id_kor":
-        return (
-            f"현재 발화 이전에 {len(prev_ctx)}개의 발화가 이어져 있습니다. "
-            "당신은 대상 언어 사용자로서 앞선 맥락에서 드러난 관계, 정서, 장면 분위기, 공손성 수준을 알고 있습니다. "
-            "이 정보는 현재 발화 해석 배경이며 다음 발화 계획은 포함하지 않습니다."
-        )
-
+def _fallback_user_b_context(row: Dict[str, Any]) -> str:
+    n = len(row.get("prev_context", []) or [])
     return (
-        f"Percakapan sebelum giliran ini mencakup {len(prev_ctx)} ujaran. "
-        "Anda adalah pengguna bahasa target yang memahami latar relasi, emosi, suasana, dan tingkat formalitas dari konteks sebelumnya. "
-        "Informasi ini menjadi landasan memahami ujaran saat ini tanpa memproyeksikan giliran berikutnya."
+        f"User B (target-side speaker): The conversation has {n} prior turns "
+        "shaping the relational context, formality level, and communicative stance. "
+        "This grounding informs interpretation of the current turn without projecting future replies."
     )
-
-
-def _split_exchanges(text: str) -> List[str]:
-    compact = " ".join((text or "").split())
-    if not compact:
-        return []
-
-    parts = re.split(r"(?:(?<=\s)|^)-\s*", compact)
-    exchanges = [p.strip(" -") for p in parts if p and p.strip(" -")]
-    return exchanges if exchanges else [compact]
-
-
-def _collect_prev_exchanges(
-    row: Dict[str, Any], direction: str, side: str
-) -> List[str]:
-    prev_ctx = row.get("prev_context", []) or []
-    exchanges: List[str] = []
-
-    for ctx_row in prev_ctx:
-        text = (
-            _ctx_target_text(ctx_row, direction)
-            if side == "target"
-            else _ctx_source_text(ctx_row, direction)
-        )
-        exchanges.extend(_split_exchanges(text))
-
-    return exchanges
-
-
-def _label_exchanges(exchanges: List[str]) -> List[str]:
-    labeled: List[str] = []
-    n = len(exchanges)
-    if n == 0:
-        return labeled
-
-    # Assume alternating exchanges and anchor to current-source speaker = User A,
-    # so the immediate previous exchange is User B.
-    for i, ex in enumerate(exchanges):
-        distance_from_last = (n - 1) - i
-        speaker = "User B" if distance_from_last % 2 == 0 else "User A"
-        cleaned = _strip_guidance_phrases(_shorten(ex, max_chars=180))
-        if cleaned:
-            labeled.append(f"{speaker}: {cleaned}")
-
-    return labeled
-
-
-def _build_last5_labeled_exchanges(
-    row: Dict[str, Any],
-    direction: str,
-    side: str,
-) -> List[str]:
-    exchanges = _collect_prev_exchanges(row, direction, side=side)
-    labeled = _label_exchanges(exchanges)
-    return labeled[-5:]
-
-
-def _build_conversation_history_block(row: Dict[str, Any], direction: str) -> str:
-    source_lines = _build_last5_labeled_exchanges(row, direction, side="source")
-    target_lines = _build_last5_labeled_exchanges(row, direction, side="target")
-
-    if direction == "id_kor":
-        source_header = (
-            "Riwayat pertukaran sebelumnya (bahasa User A / sumber - Indonesia):"
-        )
-        target_header = "이전 발화 교환 기록 (User B 언어 / 대상 - 한국어):"
-    else:
-        source_header = "이전 발화 교환 기록 (User A 언어 / 원문 - 한국어):"
-        target_header = (
-            "Riwayat pertukaran sebelumnya (bahasa User B / target - Indonesia):"
-        )
-
-    source_block = "\n".join(source_lines) if source_lines else "- (none)"
-    target_block = "\n".join(target_lines) if target_lines else "- (none)"
-    return f"{source_header}\n{source_block}\n{target_header}\n{target_block}".strip()
-
-
-def _build_user_history_block(row: Dict[str, Any], direction: str, user: str) -> str:
-    if user == "a":
-        side = "source"
-        if direction == "id_kor":
-            header = "Riwayat pertukaran terakhir (konteks sebelumnya):"
-        else:
-            header = "이전 맥락 최근 발화 교환:"
-    else:
-        side = "target"
-        if direction == "id_kor":
-            header = "이전 맥락 최근 발화 교환:"
-        else:
-            header = "Riwayat pertukaran terakhir (konteks sebelumnya):"
-
-    lines = _build_last5_labeled_exchanges(row, direction, side=side)
-    if not lines:
-        return f"{header}\n- (none)"
-    return header + "\n" + "\n".join(lines)
-
-
-def _user_role_prefix(direction: str, user: str) -> str:
-    if user == "a":
-        if direction == "id_kor":
-            return "Peran Anda: User A (penutur sumber)."
-        return "당신의 역할: User A(원문 사용자)."
-
-    if direction == "id_kor":
-        return "당신의 역할: User B(대상 언어 사용자)."
-    return "Peran Anda: User B (pengguna bahasa target)."
-
-
-def _contains_english_template_language(text: str) -> bool:
-    lowered = (text or "").lower()
-    return any(re.search(pat, lowered) for pat in ENGLISH_TEMPLATE_PATTERNS)
-
-
-def _expected_user_role_marker(direction: str, user: str) -> str:
-    if user == "a":
-        return "Peran Anda" if direction == "id_kor" else "당신의 역할"
-    return "당신의 역할" if direction == "id_kor" else "Peran Anda"
 
 
 def _extract_reason_tags(row: Dict[str, Any]) -> List[str]:
@@ -463,33 +703,44 @@ def _extract_reason_tags(row: Dict[str, Any]) -> List[str]:
     return out
 
 
-def _resolve_direction(global_index_1_based: int) -> str:
-    split_index_0_based = global_index_1_based - 1
-    return "id_kor" if split_index_0_based % 2 == 0 else "kor_id"
+def _reference_alignment_note(labse_sim: Optional[float]) -> str:
+    """Return a prompt note calibrating trust in the reference translation."""
+    if labse_sim is None:
+        return ""
+    if labse_sim >= 0.7:
+        label = "High"
+        advice = "reference translation is reliable."
+    elif labse_sim >= 0.5:
+        label = "Moderate"
+        advice = "use the reference translation with some caution."
+    elif labse_sim >= 0.3:
+        label = "Low"
+        advice = (
+            "reference translation may be partially misaligned; "
+            "weight it less heavily and rely more on the source text."
+        )
+    else:
+        label = "Very low"
+        advice = (
+            "reference translation is likely misaligned or loosely parallel; "
+            "treat it as unreliable and derive your analysis primarily from the source text."
+        )
+    return (
+        f"Reference alignment confidence: {label} "
+        f"(LaBSE cosine similarity: {labse_sim:.2f}) — {advice}"
+    )
 
 
-def _direction_spec(direction: str) -> Dict[str, str]:
-    if direction == "id_kor":
-        return {
-            "source_code": "ind",
-            "target_code": "kor",
-            "source_language": LANGS["ind"]["name"],
-            "target_language": LANGS["kor"]["name"],
-        }
-    if direction == "kor_id":
-        return {
-            "source_code": "kor",
-            "target_code": "ind",
-            "source_language": LANGS["kor"]["name"],
-            "target_language": LANGS["ind"]["name"],
-        }
-    raise ValueError(f"Unsupported direction: {direction}")
-
-
-def _render_prompt(row: Dict[str, Any], direction: str) -> str:
-    spec = _direction_spec(direction)
-
-    if direction == "id_kor":
+def _render_prompt(
+    row: Dict[str, Any],
+    is_fwd: bool,
+    src_lang_name: str,
+    tgt_lang_name: str,
+    src_lang_code: str,
+    tgt_lang_code: str,
+    cultural_context: Optional[str] = None,
+) -> str:
+    if is_fwd:
         source_text = str(row.get("source_text", "")).strip()
         reference_target_text = str(row.get("target_text", "")).strip()
     else:
@@ -498,19 +749,32 @@ def _render_prompt(row: Dict[str, Any], direction: str) -> str:
 
     prev_lines = _iter_context(row.get("prev_context", []))
     prev_block = "\n".join(prev_lines) if prev_lines else "(none)"
-
     reason_tags = _extract_reason_tags(row)
-    reason_text = ", ".join(reason_tags) if reason_tags else "(none)"
-    context_digest = _build_context_digest(row, direction)
+    reason_tags_block = _expand_reason_hints(reason_tags)
+    context_digest = _build_context_digest(row, is_fwd)
+
+    if cultural_context:
+        cultural_context_block = (
+            "Pair-specific cultural context (anchor all layer_3 criteria and cultural failure points here):\n"
+            + cultural_context
+            + "\n\n"
+        )
+    else:
+        cultural_context_block = ""
+
+    labse_sim = row.get("labse_similarity")
+    alignment_note = _reference_alignment_note(labse_sim)
 
     return PROMPT_TEMPLATE.format(
-        source_language=spec["source_language"],
-        source_language_code=spec["source_code"],
-        target_language=spec["target_language"],
-        target_language_code=spec["target_code"],
+        source_language=src_lang_name,
+        source_language_code=src_lang_code,
+        target_language=tgt_lang_name,
+        target_language_code=tgt_lang_code,
+        cultural_context_block=cultural_context_block,
         source_text=source_text,
         reference_target_text=reference_target_text,
-        reason_tags=reason_text,
+        reference_alignment_note=alignment_note,
+        reason_tags_block=reason_tags_block,
         context_digest=context_digest,
         prev_context=prev_block,
     )
@@ -520,18 +784,15 @@ def _extract_json(text: str) -> Dict[str, Any]:
     text = text.strip()
     if not text:
         raise ValueError("Empty model output")
-
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise ValueError(f"Model output does not contain JSON object: {text[:300]}")
-
-    return json.loads(text[start : end + 1])
+    return json.loads(text[start: end + 1])
 
 
 def _llm_generate(
@@ -541,29 +802,30 @@ def _llm_generate(
     temperature: float,
     max_output_tokens: int,
     request_timeout_s: float,
+    seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     endpoint = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{urllib.parse.quote(model_name, safe='')}:generateContent"
         f"?key={urllib.parse.quote(api_key, safe='')}"
     )
-
+    gen_config: Dict[str, Any] = {
+        "temperature": temperature,
+        "maxOutputTokens": max_output_tokens,
+        "responseMimeType": "application/json",
+    }
+    if seed is not None:
+        gen_config["seed"] = seed
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
-            "responseMimeType": "application/json",
-        },
+        "generationConfig": gen_config,
     }
-
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-
     try:
         with urllib.request.urlopen(req, timeout=request_timeout_s) as resp:
             body = resp.read().decode("utf-8")
@@ -577,7 +839,6 @@ def _llm_generate(
     candidates = parsed.get("candidates") or []
     if not candidates:
         raise RuntimeError(f"Gemini returned no candidates: {parsed}")
-
     parts = (
         (candidates[0].get("content") or {}).get("parts")
         if isinstance(candidates[0], dict)
@@ -588,7 +849,6 @@ def _llm_generate(
         text = str(parts[0].get("text") or "")
     if not text:
         raise RuntimeError(f"Gemini returned empty text: {parsed}")
-
     raw = _extract_json(text)
     return _normalize_generated_fields(raw)
 
@@ -638,21 +898,23 @@ def _strip_existing_turn_history(text: str) -> str:
 
 
 def _contains_current_source_text(
-    context_text: str, row: Dict[str, Any], direction: str
+    context_text: str, row: Dict[str, Any], is_fwd: bool
 ) -> bool:
-    current_source = (
-        _as_string(row.get("source_text", ""))
-        if direction == "id_kor"
-        else _as_string(row.get("target_text", ""))
+    current_source = _as_string(
+        row.get("source_text" if is_fwd else "target_text", "")
     )
     if not current_source:
         return False
-
     src_norm = re.sub(r"\W+", "", current_source.lower())
     ctx_norm = re.sub(r"\W+", "", (context_text or "").lower())
     if len(src_norm) < 16:
         return False
     return src_norm[:16] in ctx_norm or src_norm[-16:] in ctx_norm
+
+
+def _contains_english_template_language(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(re.search(pat, lowered) for pat in ENGLISH_TEMPLATE_PATTERNS)
 
 
 def _dedupe_keep_order(items: List[str]) -> List[str]:
@@ -686,7 +948,6 @@ def _compose_verification_prompt(checklist: Dict[str, List[str]]) -> str:
 def _normalize_verification_prompt(raw_prompt: str) -> str:
     if not raw_prompt:
         return raw_prompt
-
     normalized = " ".join(raw_prompt.split())
     parts = re.split(r"(?=\b\d+\.)", normalized)
     items = [p.strip() for p in parts if p.strip()]
@@ -718,9 +979,7 @@ def _sanitize_non_transcript_context(
     out = re.sub(r"\bTurn\s*-?\d+\b", "", out, flags=re.IGNORECASE)
     out = re.sub(r"\s+", " ", out).strip()
     out = _strip_guidance_phrases(out)
-    out = _trim_to_sentence_window(
-        out, min_sentences=min_sentences, max_sentences=max_sentences
-    )
+    out = _trim_to_sentence_window(out, min_sentences=min_sentences, max_sentences=max_sentences)
     return out.strip()
 
 
@@ -732,14 +991,12 @@ def _checklist_has_keyword(items: List[str], keywords: List[str]) -> bool:
 def _repair_generated_sample(
     generated: Dict[str, Any],
     row: Dict[str, Any],
-    direction: str,
+    is_fwd: bool,
 ) -> Dict[str, Any]:
-    fallback_window = _fallback_context_window_summary(row, direction)
-    fallback_conversation = _fallback_conversation_context(row, direction)
-    fallback_user_a = _fallback_user_a_context(row, direction)
-    fallback_user_b = _fallback_user_b_context(row, direction)
-    user_a_role = _user_role_prefix(direction, user="a")
-    user_b_role = _user_role_prefix(direction, user="b")
+    fallback_window = _fallback_context_window_summary(row)
+    fallback_conversation = _fallback_conversation_context(row)
+    fallback_user_a = _fallback_user_a_context(row)
+    fallback_user_b = _fallback_user_b_context(row)
 
     context_window_summary = _trim_to_sentence_window(
         _strip_hint_sentences(_as_string(generated.get("context_window_summary", ""))),
@@ -747,9 +1004,7 @@ def _repair_generated_sample(
         max_sentences=4,
     )
     context_window_summary = _strip_existing_turn_history(context_window_summary)
-    if not context_window_summary or _contains_english_template_language(
-        context_window_summary
-    ):
+    if not context_window_summary or _contains_english_template_language(context_window_summary):
         context_window_summary = fallback_window
     context_window_summary = _strip_guidance_phrases(context_window_summary)
     generated["context_window_summary"] = context_window_summary
@@ -759,9 +1014,7 @@ def _repair_generated_sample(
         min_sentences=2,
         max_sentences=5,
     )
-    if not conversation_context or _contains_english_template_language(
-        conversation_context
-    ):
+    if not conversation_context or _contains_english_template_language(conversation_context):
         conversation_context = fallback_conversation
     generated["conversation_context"] = conversation_context
 
@@ -781,11 +1034,14 @@ def _repair_generated_sample(
     if not user_b_body or _contains_english_template_language(user_b_body):
         user_b_body = fallback_user_b
 
-    user_a_context = f"{user_a_role} {user_a_body}".strip()
-    user_b_context = f"{user_b_role} {user_b_body}".strip()
+    # Ensure "User A" / "User B" markers are always present
+    if "User A" not in user_a_body:
+        user_a_body = "User A (source-side speaker). " + user_a_body
+    if "User B" not in user_b_body:
+        user_b_body = "User B (target-side speaker). " + user_b_body
 
-    generated["user_a_context"] = user_a_context
-    generated["user_b_context"] = user_b_context
+    generated["user_a_context"] = user_a_body
+    generated["user_b_context"] = user_b_body
 
     generated["mandatory_cultural_constraints"] = _dedupe_keep_order(
         _as_string_list(generated.get("mandatory_cultural_constraints"))
@@ -796,40 +1052,27 @@ def _repair_generated_sample(
         checklist = {}
 
     l1 = _dedupe_keep_order(_as_string_list(checklist.get("layer_1_semantic_core")))
-    l2 = _dedupe_keep_order(
-        _as_string_list(checklist.get("layer_2_pragmatic_function"))
-    )
-    l3 = _dedupe_keep_order(
-        _as_string_list(checklist.get("layer_3_cultural_social_constraints"))
-    )
+    l2 = _dedupe_keep_order(_as_string_list(checklist.get("layer_2_pragmatic_function")))
+    l3 = _dedupe_keep_order(_as_string_list(checklist.get("layer_3_cultural_social_constraints")))
 
     if len(l1) > 2:
         l2.extend(l1[2:])
         l1 = l1[:2]
 
     if not l1:
-        l1 = [
-            "Does the translation preserve the core factual meaning of the source utterance?"
-        ]
+        l1 = ["Does the translation preserve the core factual meaning of the source utterance?"]
     if len(l2) < 2:
-        l2.extend(
-            [
-                "Does the translation preserve the speaker's communicative intent?",
-                "Does the translation preserve interpersonal stance and implied intent in context?",
-            ]
-        )
+        l2.extend([
+            "Does the translation preserve the speaker's communicative intent?",
+            "Does the translation preserve interpersonal stance and implied intent in context?",
+        ])
     if len(l3) < 2:
-        l3.extend(
-            [
-                "Does the translation preserve required register, politeness, and social stance?",
-                "Does the translation bridge non-literal constraints required for natural understanding?",
-            ]
-        )
+        l3.extend([
+            "Does the translation preserve required register, politeness, and social stance?",
+            "Does the translation bridge non-literal constraints required for natural understanding?",
+        ])
 
-    if not _checklist_has_keyword(
-        l2,
-        ["context", "preced", "follow", "coher", "turn", "dialogue flow"],
-    ):
+    if not _checklist_has_keyword(l2, ["context", "preced", "follow", "coher", "turn", "dialogue flow"]):
         l2.append(
             "Does the translation remain coherent with surrounding dialogue turns and local context?"
         )
@@ -850,30 +1093,21 @@ def _repair_generated_sample(
         "layer_2_pragmatic_function": l2,
         "layer_3_cultural_social_constraints": l3,
     }
-
-    generated["verification_prompt"] = _compose_verification_prompt(
-        generated["checklist"]
-    )
     generated["verification_prompt"] = _normalize_verification_prompt(
-        generated["verification_prompt"]
+        _compose_verification_prompt(generated["checklist"])
     )
-
     return generated
 
 
 def _validate_generated_sample(
     generated: Dict[str, Any],
     row: Optional[Dict[str, Any]] = None,
-    direction: Optional[str] = None,
+    is_fwd: Optional[bool] = None,
 ) -> List[str]:
     errors: List[str] = []
 
-    cc = _trim_to_sentence_window(
-        _as_string(generated.get("conversation_context", "")), 1, 10
-    )
-    cws = _trim_to_sentence_window(
-        _as_string(generated.get("context_window_summary", "")), 1, 10
-    )
+    cc = _trim_to_sentence_window(_as_string(generated.get("conversation_context", "")), 1, 10)
+    cws = _trim_to_sentence_window(_as_string(generated.get("context_window_summary", "")), 1, 10)
 
     if not cc:
         errors.append("conversation_context is empty")
@@ -882,13 +1116,9 @@ def _validate_generated_sample(
     if "Turn" in cc:
         errors.append("conversation_context should not include Turn numbering")
     if "User A:" in cc or "User B:" in cc:
-        errors.append(
-            "conversation_context should not expose transcript-style speaker lines"
-        )
+        errors.append("conversation_context should not expose transcript-style speaker lines")
     if re.search(r"\b(src|tgt)\s*:", cc, flags=re.IGNORECASE):
-        errors.append(
-            "conversation_context should not expose src/tgt transcript markers"
-        )
+        errors.append("conversation_context should not expose src/tgt transcript markers")
     if _contains_english_template_language(cc):
         errors.append("conversation_context contains English template prose")
     if not cws:
@@ -900,12 +1130,13 @@ def _validate_generated_sample(
     if "Turn" in cws:
         errors.append("context_window_summary should not include Turn numbering")
 
-    if _contains_hinting_language(_as_string(generated.get("user_a_context", ""))):
-        errors.append("user_a_context contains hinting language")
-    if _contains_hinting_language(_as_string(generated.get("user_b_context", ""))):
-        errors.append("user_b_context contains hinting language")
     ua = _as_string(generated.get("user_a_context", ""))
     ub = _as_string(generated.get("user_b_context", ""))
+
+    if _contains_hinting_language(ua):
+        errors.append("user_a_context contains hinting language")
+    if _contains_hinting_language(ub):
+        errors.append("user_b_context contains hinting language")
     if "Turn" in ua:
         errors.append("user_a_context should not include Turn numbering")
     if "Turn" in ub:
@@ -915,13 +1146,9 @@ def _validate_generated_sample(
     if "User B" not in ub:
         errors.append("user_b_context must explicitly identify the user as User B")
     if "User A:" in ua or "User B:" in ua:
-        errors.append(
-            "user_a_context should not include transcript-style speaker lines"
-        )
+        errors.append("user_a_context should not include transcript-style speaker lines")
     if "User A:" in ub or "User B:" in ub:
-        errors.append(
-            "user_b_context should not include transcript-style speaker lines"
-        )
+        errors.append("user_b_context should not include transcript-style speaker lines")
     if re.search(r"\b(src|tgt)\s*:", ua, flags=re.IGNORECASE):
         errors.append("user_a_context should not expose src/tgt transcript markers")
     if re.search(r"\b(src|tgt)\s*:", ub, flags=re.IGNORECASE):
@@ -930,27 +1157,15 @@ def _validate_generated_sample(
         errors.append("user_a_context contains English template prose")
     if _contains_english_template_language(ub):
         errors.append("user_b_context contains English template prose")
-    if direction is not None and _expected_user_role_marker(direction, "a") not in ua:
-        errors.append(
-            "user_a_context language marker does not match expected user language"
-        )
-    if direction is not None and _expected_user_role_marker(direction, "b") not in ub:
-        errors.append(
-            "user_b_context language marker does not match expected user language"
-        )
 
-    if row is not None and direction is not None:
-        if _contains_current_source_text(cc, row, direction):
-            errors.append(
-                "conversation_context should not include current source utterance"
-            )
-        if _contains_current_source_text(cws, row, direction):
-            errors.append(
-                "context_window_summary should not include current source utterance"
-            )
-        if _contains_current_source_text(ua, row, direction):
+    if row is not None and is_fwd is not None:
+        if _contains_current_source_text(cc, row, is_fwd):
+            errors.append("conversation_context should not include current source utterance")
+        if _contains_current_source_text(cws, row, is_fwd):
+            errors.append("context_window_summary should not include current source utterance")
+        if _contains_current_source_text(ua, row, is_fwd):
             errors.append("user_a_context should not include current source utterance")
-        if _contains_current_source_text(ub, row, direction):
+        if _contains_current_source_text(ub, row, is_fwd):
             errors.append("user_b_context should not include current source utterance")
 
     checklist = generated.get("checklist")
@@ -968,18 +1183,11 @@ def _validate_generated_sample(
     if l3 < 2:
         errors.append("layer_3_cultural_social_constraints must have at least 2 items")
     if not (l3 >= l2 >= l1):
-        errors.append(
-            "checklist count priority must satisfy layer_3 >= layer_2 >= layer_1"
-        )
+        errors.append("checklist count priority must satisfy layer_3 >= layer_2 >= layer_1")
 
     l2_items = _as_string_list(checklist.get("layer_2_pragmatic_function"))
-    if not _checklist_has_keyword(
-        l2_items,
-        ["context", "coher", "preced", "follow", "turn"],
-    ):
-        errors.append(
-            "layer_2_pragmatic_function should include context-coherence criterion"
-        )
+    if not _checklist_has_keyword(l2_items, ["context", "coher", "preced", "follow", "turn"]):
+        errors.append("layer_2_pragmatic_function should include context-coherence criterion")
 
     return errors
 
@@ -987,41 +1195,45 @@ def _validate_generated_sample(
 def _build_output_record(
     row: Dict[str, Any],
     generated: Dict[str, Any],
-    direction: str,
+    src_code: str,
+    tgt_code: str,
+    is_fwd: bool,
     global_index: int,
+    lang_pair: str,
+    consistency_run_id: int = 0,
+    consistency_temperature: float = 0.0,
 ) -> Dict[str, Any]:
-    spec = _direction_spec(direction)
-    source_code = spec["source_code"]
-    target_code = spec["target_code"]
-
-    if direction == "id_kor":
+    if is_fwd:
         source_text = str(row.get("source_text", "")).strip()
         reference_target_text = str(row.get("target_text", "")).strip()
+        out_src_code, out_tgt_code = src_code, tgt_code
     else:
         source_text = str(row.get("target_text", "")).strip()
         reference_target_text = str(row.get("source_text", "")).strip()
+        out_src_code, out_tgt_code = tgt_code, src_code
 
+    direction_label = f"{out_src_code}_{out_tgt_code}"
     reason_tags = _extract_reason_tags(row)
 
-    return {
+    record: Dict[str, Any] = {
         "seed_file": row.get("segment_file", ""),
-        "seed_split": "opensubtitles_scene_filtered_repaired",
+        "seed_split": f"opensubtitles_{lang_pair}",
         "seed_row_id": global_index,
         "Category": "MAPS-Dialogue-Pragmatics",
         "Source Concept (Original Source Language)": generated["semantic_core"],
         "Verification Goal (Target Receiver)": generated["semantic_core"],
-        'Linguistic/Cultural "Trap"': " | ".join(
-            generated["mandatory_cultural_constraints"]
-        ),
-        "source_language": spec["source_language"],
-        "target_language": spec["target_language"],
-        "source_language_code": source_code,
-        "target_language_code": target_code,
-        "direction": direction,
+        'Linguistic/Cultural "Trap"': " | ".join(generated["mandatory_cultural_constraints"]),
+        "source_language": LANGS[out_src_code]["name"],
+        "target_language": LANGS[out_tgt_code]["name"],
+        "source_language_code": out_src_code,
+        "target_language_code": out_tgt_code,
+        "direction": direction_label,
+        "lang_pair": lang_pair,
         "segment_file": row.get("segment_file", ""),
         "segment_id": row.get("segment_id", ""),
         "source_text": source_text,
         "reference_target_text": reference_target_text,
+        "pragmatic_analysis": generated["pragmatic_analysis"],
         "speech_act_intent": generated["speech_act_intent"],
         "semantic_core": generated["semantic_core"],
         "mandatory_cultural_constraints": generated["mandatory_cultural_constraints"],
@@ -1030,15 +1242,9 @@ def _build_output_record(
         "user_a_context": generated["user_a_context"],
         "user_b_context": generated["user_b_context"],
         "verification_prompt": generated["verification_prompt"],
-        "checklist_layer_1_semantic_core": generated["checklist"][
-            "layer_1_semantic_core"
-        ],
-        "checklist_layer_2_pragmatic_function": generated["checklist"][
-            "layer_2_pragmatic_function"
-        ],
-        "checklist_layer_3_cultural_social_constraints": generated["checklist"][
-            "layer_3_cultural_social_constraints"
-        ],
+        "checklist_layer_1_semantic_core": generated["checklist"]["layer_1_semantic_core"],
+        "checklist_layer_2_pragmatic_function": generated["checklist"]["layer_2_pragmatic_function"],
+        "checklist_layer_3_cultural_social_constraints": generated["checklist"]["layer_3_cultural_social_constraints"],
         "reasons": reason_tags,
         "source_row": {
             "worthiness_score": row.get("worthiness_score"),
@@ -1050,6 +1256,10 @@ def _build_output_record(
             "n_after": row.get("n_after"),
         },
     }
+    if consistency_run_id > 0:
+        record["consistency_run_id"] = consistency_run_id
+        record["consistency_temperature"] = consistency_temperature
+    return record
 
 
 def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
@@ -1057,10 +1267,54 @@ def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _row_direction_flags(row: Dict[str, Any], force_directions: Optional[List[str]]) -> List[bool]:
+    """Return which is_fwd values to process for this row.
+
+    By default, derived from the row's 'direction' field (fwd/rev/both).
+    If force_directions is given, it overrides the per-row field.
+    """
+    if force_directions is not None:
+        flags: List[bool] = []
+        if "fwd" in force_directions:
+            flags.append(True)
+        if "rev" in force_directions:
+            flags.append(False)
+        return flags
+    row_dir = str(row.get("direction") or "both").lower()
+    if row_dir == "fwd":
+        return [True]
+    if row_dir == "rev":
+        return [False]
+    return [True, False]  # "both" or unknown
+
+
+def _load_existing_keys_with_runs(path: Path) -> Set[Tuple[str, str, str, int]]:
+    """Keys are (segment_file, segment_id, direction, consistency_run_id)."""
+    keys: Set[Tuple[str, str, str, int]] = set()
+    if not path.exists():
+        return keys
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                obj = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            seg_file = str(obj.get("segment_file", ""))
+            seg_id = str(obj.get("segment_id", ""))
+            direction = str(obj.get("direction", ""))
+            run_id = int(obj.get("consistency_run_id", 0))
+            keys.add((seg_file, seg_id, direction, run_id))
+    return keys
+
+
 def run_augmentation(
     input_jsonl: Path,
-    output_id_kor: Path,
-    output_kor_id: Path,
+    output_jsonl: Path,
+    lang_pair: str,
+    force_directions: Optional[List[str]],
     model_name: str,
     max_rows: int,
     start_index: int,
@@ -1072,79 +1326,138 @@ def run_augmentation(
     retry_backoff_s: float,
     append: bool,
     input_index_offset: int,
+    use_cultural_context: bool = True,
+    consistency_runs: int = 1,
+    consistency_temps: Optional[List[float]] = None,
+    concurrency: int = 8,
+    base_seed: Optional[int] = None,
 ) -> None:
+    if lang_pair not in PAIR_LANGS:
+        raise ValueError(f"Unknown lang_pair '{lang_pair}'. Known: {sorted(PAIR_LANGS)}")
+    src_code, tgt_code = PAIR_LANGS[lang_pair]
+
     repo_root = Path(__file__).resolve().parent.parent
     _load_env(repo_root)
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing. Set it in .env or environment.")
 
+    cultural_context = CULTURAL_CONTEXT.get(lang_pair) if use_cultural_context else None
+
+    # Resolve per-run temperatures
+    n_runs = max(1, consistency_runs)
+    if consistency_temps and len(consistency_temps) >= n_runs:
+        run_temps = consistency_temps[:n_runs]
+    else:
+        if n_runs == 1:
+            run_temps = [temperature]
+        elif n_runs == 2:
+            run_temps = [temperature, 0.8]
+        else:
+            step = (0.9 - temperature) / (n_runs - 1) if temperature < 0.9 else 0.0
+            run_temps = [round(temperature + i * step, 2) for i in range(n_runs)]
+
     rows = _read_jsonl(input_jsonl)
     if start_index > 0:
         rows = rows[start_index:]
     if max_rows > 0:
         rows = rows[:max_rows]
-
     if not rows:
         raise RuntimeError("No rows to process after applying start/max limits.")
 
-    output_id_kor.parent.mkdir(parents=True, exist_ok=True)
-    output_kor_id.parent.mkdir(parents=True, exist_ok=True)
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
 
-    existing_id_kor = _load_existing_keys(output_id_kor) if append else set()
-    existing_kor_id = _load_existing_keys(output_kor_id) if append else set()
-
+    multi_run = n_runs > 1
+    existing_run_keys: Set[Tuple[str, str, str, int]] = set()
+    existing_simple_keys: Set[Tuple[str, str, str]] = set()
+    if append:
+        if multi_run:
+            existing_run_keys = _load_existing_keys_with_runs(output_jsonl)
+        else:
+            existing_simple_keys = {(a, b, c) for a, b, c, _ in _load_existing_keys_with_runs(output_jsonl)}
     if not append:
-        output_id_kor.write_text("", encoding="utf-8")
-        output_kor_id.write_text("", encoding="utf-8")
+        output_jsonl.write_text("", encoding="utf-8")
 
-    written_id_kor = 0
-    written_kor_id = 0
+    # Pre-build task list so we can submit all to the thread pool at once.
+    all_tasks: List[Dict[str, Any]] = []
     skipped_existing = 0
-    failed_rows = 0
+    for row_idx, row in enumerate(rows, start=1):
+        direction_flags = _row_direction_flags(row, force_directions)
+        for is_fwd in direction_flags:
+            global_index = input_index_offset + row_idx
+            out_src, out_tgt = (src_code, tgt_code) if is_fwd else (tgt_code, src_code)
+            direction_label = f"{out_src}_{out_tgt}"
+            simple_key = (str(row.get("segment_file", "")), str(row.get("segment_id", "")), direction_label)
 
-    for idx, row in enumerate(rows, start=1):
-        global_index = input_index_offset + idx
-        direction = _resolve_direction(global_index)
-        key = (str(row.get("segment_file", "")), str(row.get("segment_id", "")))
+            for run_idx in range(1, n_runs + 1):
+                run_key = (*simple_key, run_idx if multi_run else 0)
+                if multi_run and run_key in existing_run_keys:
+                    skipped_existing += 1
+                    continue
+                if not multi_run and simple_key in existing_simple_keys:
+                    skipped_existing += 1
+                    continue
+                all_tasks.append({
+                    "row": row,
+                    "row_idx": row_idx,
+                    "is_fwd": is_fwd,
+                    "run_idx": run_idx,
+                    "run_temp": run_temps[run_idx - 1],
+                    "run_key": run_key,
+                    "simple_key": simple_key,
+                    "direction_label": direction_label,
+                    "global_index": global_index,
+                    "out_src": out_src,
+                    "out_tgt": out_tgt,
+                })
 
-        if direction == "id_kor" and key in existing_id_kor:
-            skipped_existing += 1
-            continue
-        if direction == "kor_id" and key in existing_kor_id:
-            skipped_existing += 1
-            continue
+    total_tasks = len(all_tasks)
+    print(
+        f"tasks_to_process={total_tasks} skipped_existing={skipped_existing} concurrency={concurrency}",
+        flush=True,
+    )
 
-        prompt = _render_prompt(row=row, direction=direction)
+    stats: Dict[str, int] = {"written": 0, "failed": 0, "completed": 0}
+    write_lock = threading.Lock()
+
+    def _execute_task(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        row = task["row"]
+        is_fwd = task["is_fwd"]
+        run_idx = task["run_idx"]
+        run_temp = task["run_temp"]
+        out_src = task["out_src"]
+        out_tgt = task["out_tgt"]
+        direction_label = task["direction_label"]
+        row_idx = task["row_idx"]
+
+        prompt = _render_prompt(
+            row=row,
+            is_fwd=is_fwd,
+            src_lang_name=LANGS[out_src]["name"],
+            tgt_lang_name=LANGS[out_tgt]["name"],
+            src_lang_code=out_src,
+            tgt_lang_code=out_tgt,
+            cultural_context=cultural_context,
+        )
 
         generated: Optional[Dict[str, Any]] = None
         for attempt in range(1, max_retries + 1):
             try:
+                run_seed = (base_seed + run_idx - 1) if base_seed is not None else None
                 generated = _llm_generate(
                     api_key=api_key,
                     model_name=model_name,
                     prompt=prompt,
-                    temperature=temperature,
+                    temperature=run_temp,
                     max_output_tokens=max_output_tokens,
                     request_timeout_s=request_timeout_s,
+                    seed=run_seed,
                 )
-                generated = _repair_generated_sample(
-                    generated=generated,
-                    row=row,
-                    direction=direction,
-                )
-                errors = _validate_generated_sample(
-                    generated,
-                    row=row,
-                    direction=direction,
-                )
+                generated = _repair_generated_sample(generated=generated, row=row, is_fwd=is_fwd)
+                errors = _validate_generated_sample(generated, row=row, is_fwd=is_fwd)
                 hard_failures = [
-                    e
-                    for e in errors
-                    if "empty" in e
-                    or "at least" in e
-                    or "priority" in e
-                    or "should include" in e
+                    e for e in errors
+                    if "empty" in e or "at least" in e or "priority" in e or "should include" in e
                 ]
                 if hard_failures:
                     raise ValueError("; ".join(hard_failures))
@@ -1152,146 +1465,118 @@ def run_augmentation(
             except Exception as exc:
                 if attempt >= max_retries:
                     print(
-                        f"failed row={global_index} direction={direction} after {max_retries} attempts: {exc}",
+                        f"failed row={row_idx} dir={direction_label} run={run_idx} "
+                        f"after {max_retries} attempts: {exc}",
                         flush=True,
                     )
-                    failed_rows += 1
                     generated = None
                     break
-                wait_s = retry_backoff_s * attempt
+                err_str = str(exc)
+                is_rate_limit = "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower()
+                # Use longer backoff for rate limit errors so threads back off together.
+                wait_s = max(retry_backoff_s * attempt * 4, 20.0) if is_rate_limit else retry_backoff_s * attempt
                 print(
-                    f"retry row={global_index} direction={direction} attempt={attempt}/{max_retries} wait={wait_s:.1f}s error={exc}",
+                    f"retry row={row_idx} dir={direction_label} run={run_idx} "
+                    f"attempt={attempt}/{max_retries} wait={wait_s:.1f}s error={exc}",
                     flush=True,
                 )
                 time.sleep(wait_s)
 
         if generated is None:
-            continue
-
-        record = _build_output_record(
-            row=row,
-            generated=generated,
-            direction=direction,
-            global_index=global_index,
-        )
-
-        if direction == "id_kor":
-            _append_jsonl(output_id_kor, record)
-            existing_id_kor.add(key)
-            written_id_kor += 1
-        else:
-            _append_jsonl(output_kor_id, record)
-            existing_kor_id.add(key)
-            written_kor_id += 1
-
-        if idx % 20 == 0 or idx == len(rows):
-            print(
-                f"processed={idx}/{len(rows)} id_kor={written_id_kor} kor_id={written_kor_id} skipped_existing={skipped_existing} failed={failed_rows}",
-                flush=True,
-            )
+            return None
 
         if sleep_s > 0:
             time.sleep(sleep_s)
 
+        return _build_output_record(
+            row=row,
+            generated=generated,
+            src_code=src_code,
+            tgt_code=tgt_code,
+            is_fwd=is_fwd,
+            global_index=task["global_index"],
+            lang_pair=lang_pair,
+            consistency_run_id=run_idx if multi_run else 0,
+            consistency_temperature=run_temp if multi_run else 0.0,
+        )
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        future_to_task = {executor.submit(_execute_task, t): t for t in all_tasks}
+        for future in as_completed(future_to_task):
+            try:
+                record = future.result()
+            except Exception as exc:
+                task = future_to_task[future]
+                print(f"unexpected error task row={task['row_idx']}: {exc}", flush=True)
+                record = None
+
+            with write_lock:
+                stats["completed"] += 1
+                if record is not None:
+                    _append_jsonl(output_jsonl, record)
+                    stats["written"] += 1
+                else:
+                    stats["failed"] += 1
+                cnt = stats["completed"]
+                if cnt % 20 == 0 or cnt == total_tasks:
+                    print(
+                        f"completed={cnt}/{total_tasks} written={stats['written']} "
+                        f"failed={stats['failed']}",
+                        flush=True,
+                    )
+
     print("done", flush=True)
     print(f"input_rows={len(rows)}", flush=True)
-    print(f"written_id_kor={written_id_kor}", flush=True)
-    print(f"written_kor_id={written_kor_id}", flush=True)
+    print(f"total_tasks={total_tasks}", flush=True)
+    print(f"written={stats['written']}", flush=True)
     print(f"skipped_existing={skipped_existing}", flush=True)
-    print(f"failed_rows={failed_rows}", flush=True)
-    print(f"output_id_kor={output_id_kor}", flush=True)
-    print(f"output_kor_id={output_kor_id}", flush=True)
+    print(f"failed_rows={stats['failed']}", flush=True)
+    print(f"output={output_jsonl}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Augment filtered OpenSubtitles windows into MAPS-like data in two directions (ID->KOR and KOR->ID)."
+        description="Augment OpenSubtitles windows into MAPS-like data for any language pair."
     )
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path(
-            "outputs/opensubtitles_final_eval/final_filtered_w375_risklt1_labse060_080_windows_prev15_after2_scene_filtered_repaired.jsonl"
-        ),
-        help="Input repaired OpenSubtitles filtered JSONL.",
-    )
-    parser.add_argument(
-        "--output-id-kor",
-        type=Path,
-        default=Path("data/enriched/id_kor_maps_from_opensubs.jsonl"),
-        help="Output JSONL for Indonesian -> Korean direction.",
-    )
-    parser.add_argument(
-        "--output-kor-id",
-        type=Path,
-        default=Path("data/enriched/kor_id_maps_from_opensubs.jsonl"),
-        help="Output JSONL for Korean -> Indonesian direction.",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="gemini-3.1-pro-preview",
-        help="Gemini model name.",
-    )
-    parser.add_argument(
-        "--max-rows",
-        type=int,
-        default=0,
-        help="Process only first N rows after start-index (0 = all).",
-    )
-    parser.add_argument(
-        "--start-index",
-        type=int,
-        default=0,
-        help="Start offset in input rows (for chunked runs).",
-    )
-    parser.add_argument(
-        "--append",
-        action="store_true",
-        help="Append to outputs and skip rows already present in each direction file.",
-    )
-    parser.add_argument(
-        "--input-index-offset",
-        type=int,
-        default=0,
-        help="Offset for stable global row numbering and stable direction parity in chunked runs.",
-    )
-    parser.add_argument(
-        "--sleep-s",
-        type=float,
-        default=0.2,
-        help="Sleep duration between rows.",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.2,
-        help="Gemini temperature.",
-    )
-    parser.add_argument(
-        "--max-output-tokens",
-        type=int,
-        default=2048,
-        help="Gemini max output tokens.",
-    )
-    parser.add_argument(
-        "--request-timeout-s",
-        type=float,
-        default=90.0,
-        help="HTTP timeout per Gemini request in seconds.",
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=4,
-        help="Max retries per row.",
-    )
-    parser.add_argument(
-        "--retry-backoff-s",
-        type=float,
-        default=3.0,
-        help="Backoff multiplier in seconds. Actual wait is attempt * multiplier.",
-    )
+    parser.add_argument("--input", type=Path, required=True,
+                        help="Input JSONL from 'windows' command.")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="Output JSONL path.")
+    parser.add_argument("--lang-pair", type=str, required=True, choices=sorted(PAIR_LANGS),
+                        help="Language pair (e.g. ar-bn, id-ko).")
+    parser.add_argument("--directions", nargs="+", default=None,
+                        choices=["fwd", "rev"],
+                        help="Override direction per row: fwd, rev, or both. "
+                             "Default: use each row's own direction field (fwd/rev/both).")
+    parser.add_argument("--model", type=str, default="gemini-3.1-pro-preview")
+    parser.add_argument("--max-rows", type=int, default=0,
+                        help="Max rows to process after start-index (0=all).")
+    parser.add_argument("--start-index", type=int, default=0,
+                        help="Start offset in input rows.")
+    parser.add_argument("--append", action="store_true",
+                        help="Append to output; skip rows already present.")
+    parser.add_argument("--input-index-offset", type=int, default=0,
+                        help="Offset for stable global row numbering in chunked runs.")
+    parser.add_argument("--sleep-s", type=float, default=0.2)
+    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--max-output-tokens", type=int, default=32768)
+    parser.add_argument("--request-timeout-s", type=float, default=90.0)
+    parser.add_argument("--max-retries", type=int, default=4)
+    parser.add_argument("--retry-backoff-s", type=float, default=3.0)
+    parser.add_argument("--no-cultural-context", action="store_true",
+                        help="Disable pair-specific cultural context injection.")
+    parser.add_argument("--consistency-runs", type=int, default=1, metavar="N",
+                        help="Number of self-consistency generation runs per segment (default 1). "
+                             "When N>1, each run is stored with a consistency_run_id field.")
+    parser.add_argument("--consistency-temps", type=float, nargs="+", default=None, metavar="T",
+                        help="Temperatures for each consistency run (space-separated). "
+                             "If not given, evenly spaced from --temperature to 0.9.")
+    parser.add_argument("--concurrency", type=int, default=8, metavar="N",
+                        help="Number of parallel API calls (default: 8). "
+                             "Raise to saturate your rate limit; 429s are retried with backoff.")
+    parser.add_argument("--seed", type=int, default=None, metavar="N",
+                        help="Base seed for Gemini generationConfig. Run k uses seed+k-1, "
+                             "ensuring independent samples across consistency runs. Best-effort.")
     return parser.parse_args()
 
 
@@ -1299,8 +1584,9 @@ def main() -> None:
     args = parse_args()
     run_augmentation(
         input_jsonl=args.input,
-        output_id_kor=args.output_id_kor,
-        output_kor_id=args.output_kor_id,
+        output_jsonl=args.output,
+        lang_pair=args.lang_pair,
+        force_directions=args.directions,
         model_name=args.model,
         max_rows=args.max_rows,
         start_index=args.start_index,
@@ -1312,6 +1598,11 @@ def main() -> None:
         retry_backoff_s=args.retry_backoff_s,
         append=args.append,
         input_index_offset=args.input_index_offset,
+        use_cultural_context=not args.no_cultural_context,
+        consistency_runs=args.consistency_runs,
+        consistency_temps=args.consistency_temps,
+        concurrency=args.concurrency,
+        base_seed=args.seed,
     )
 
 

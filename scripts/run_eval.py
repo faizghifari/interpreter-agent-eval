@@ -42,14 +42,46 @@ DEFAULT_INTERPRETER_PROVIDER = "gemini"
 DEFAULT_INTERPRETER_MODEL = "gemini-3.1-flash-lite-preview"
 
 
-def create_judge_provider():
-    return GoogleAIProvider(model_name="gemini-3.1-pro-preview", **GOOGLE_THINKING_HIGH)
+DEFAULT_JUDGE_PROVIDER = "gemini"
+DEFAULT_JUDGE_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_JUDGE_THINKING_LEVEL = "high"
 
 
-def build_interpreter_provider(provider_type: str, model_name: str):
+def build_judge_provider(
+    provider_type: str,
+    model_name: str,
+    thinking_level: str = DEFAULT_JUDGE_THINKING_LEVEL,
+):
+    """Build a judge LLM provider from CLI-supplied type, model, and thinking level."""
+    if provider_type == "gemini":
+        thinking_config = {
+            "thinking_config": {"include_thoughts": True, "thinking_level": thinking_level}
+        }
+        return GoogleAIProvider(model_name=model_name, http_options={"timeout": 120000}, **thinking_config)
+    elif provider_type == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY not set in environment")
+        return OpenRouterProvider(api_key=api_key, model_name=model_name, app_name="mt-eval")
+    elif provider_type == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set in environment")
+        return OpenAIProvider(api_key=api_key, model_name=model_name)
+    else:
+        raise ValueError(
+            f"Unknown judge provider '{provider_type}'. "
+            "Choose from: gemini, openrouter, openai"
+        )
+
+
+def build_interpreter_provider(provider_type: str, model_name: str, thinking_level: str = "minimal"):
     """Build an interpreter LLM provider from CLI-supplied type and model name."""
     if provider_type == "gemini":
-        return GoogleAIProvider(model_name=model_name, **GOOGLE_THINKING_MINIMAL)
+        if thinking_level == "none":
+            return GoogleAIProvider(model_name=model_name, http_options={"timeout": 120000})
+        thinking_config = {"thinking_config": {"include_thoughts": True, "thinking_level": thinking_level}}
+        return GoogleAIProvider(model_name=model_name, http_options={"timeout": 120000}, **thinking_config)
     elif provider_type == "openrouter":
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
@@ -69,10 +101,14 @@ def build_interpreter_provider(provider_type: str, model_name: str):
 
 def create_id_model_provider():
     # SEA-LION v4 Qwen VL 8B — SEA languages only, no Korean/Arabic
+    # max_tokens caps runaway generations (some inputs make the model loop into a
+    # multi-thousand-token reply that blows the request timeout). 1024 is well above
+    # any normal single-turn user reply.
     return OpenAIProvider(
         api_key="lm-studio",
         model_name=os.getenv("LM_STUDIO_ID_MODEL", "qwen-sea-lion-v4-8b-vl"),
-        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"),
+        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://14.50.130.58:1234/v1"),
+        max_tokens=1024,
     )
 
 
@@ -81,7 +117,7 @@ def create_kr_model_provider():
     return OpenAIProvider(
         api_key="lm-studio",
         model_name=os.getenv("LM_STUDIO_KR_MODEL", "exaone-3.5-7.8b-instruct"),
-        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"),
+        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://14.50.130.58:1234/v1"),
     )
 
 
@@ -91,8 +127,27 @@ def create_ar_model_provider():
     return OpenAIProvider(
         api_key="lm-studio",
         model_name=os.getenv("LM_STUDIO_AR_MODEL", "c4ai-command-r7b-arabic-02-2025"),
-        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1"),
+        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://14.50.130.58:1234/v1"),
     )
+
+
+def create_bn_model_provider():
+    # Bengali model — set LM_STUDIO_BN_MODEL in .env once a model is selected
+    return OpenAIProvider(
+        api_key="lm-studio",
+        model_name=os.getenv("LM_STUDIO_BN_MODEL", "bengali-llm-placeholder"),
+        base_url=os.getenv("LM_STUDIO_BASE_URL", "http://14.50.130.58:1234/v1"),
+    )
+
+
+def _record_id(sample: dict) -> str:
+    """Stable unique key for a record — survives file re-ordering or growth."""
+    seg = sample.get("segment_id", "")
+    direction = sample.get("direction", "")
+    if seg or direction:
+        return f"{seg}_{direction}"
+    # Fallback for records sourced from eval_consolidated (already have a record_id)
+    return sample.get("record_id", "")
 
 
 def run_simulation_sample(
@@ -102,6 +157,9 @@ def run_simulation_sample(
     resume_file: Optional[str] = None,
     interpreter_provider=None,
     interpreter_label: Optional[str] = None,
+    filter_target_lang: Optional[str] = None,
+    judge_provider=None,
+    judge_label: Optional[str] = None,
 ):
     print(f"\n{'='*50}")
     print(f"Running Simulation for {os.path.basename(data_file)}")
@@ -112,57 +170,59 @@ def run_simulation_sample(
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.basename(data_file).replace(".jsonl", "")
 
-    # Resume: reuse existing output file and skip already-processed indices
-    already_done = set()
-    if resume_file and os.path.exists(resume_file):
+    # Resume: if a resume_file path is given, always write there (creating fresh if missing).
+    # Dedup key is record_id = "{segment_id}_{direction}" — stable even if the source file grows.
+    already_done: set = set()
+    if resume_file:
         output_path = resume_file
-        with open(resume_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    already_done.add(entry["sample_index"])
-                except (json.JSONDecodeError, KeyError):
-                    continue
-        print(f"Resuming from: {output_path}")
-        print(
-            f"Already completed: {len(already_done)} sample(s) — skipping indices {sorted(already_done)[:5]}{'...' if len(already_done) > 5 else ''}"
-        )
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        if os.path.exists(resume_file):
+            with open(resume_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        rid = entry.get("record_id")
+                        if rid:
+                            already_done.add(rid)
+                    except json.JSONDecodeError:
+                        continue
+            print(f"Resuming from: {output_path}")
+            print(f"Already completed: {len(already_done)} record(s)")
+        else:
+            print(f"Output (new): {output_path}")
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(output_dir, f"eval_{base_name}_{timestamp}.jsonl")
         print(f"Results will be saved to: {output_path}")
 
-    samples = []
+    # Load all records, then filter by target language, then cap at num_samples.
+    all_records = []
     with open(data_file, "r", encoding="utf-8") as f:
-        if num_samples is None:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    samples.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        else:
-            for _ in range(num_samples):
-                line = f.readline()
-                if not line:
-                    break
-                try:
-                    samples.append(json.loads(line))
-                except json.JSONDecodeError:
-                    break
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                all_records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if filter_target_lang:
+        all_records = [r for r in all_records if r.get("target_language_code") == filter_target_lang]
+        print(f"Filtered to target_lang={filter_target_lang}: {len(all_records)} record(s)")
+
+    samples = all_records[:num_samples] if num_samples is not None else all_records
 
     if not samples:
         print(f"No samples found in {data_file}")
         return
 
-    # Filter out already-processed samples
+    # Filter out already-evaluated records by stable record_id
     remaining = [
-        (i + 1, s) for i, s in enumerate(samples) if (i + 1) not in already_done
+        (i + 1, s) for i, s in enumerate(samples) if _record_id(s) not in already_done
     ]
     print(f"Loaded {len(samples)} sample(s) — {len(remaining)} remaining to evaluate")
 
@@ -173,12 +233,15 @@ def run_simulation_sample(
                 DEFAULT_INTERPRETER_PROVIDER, DEFAULT_INTERPRETER_MODEL
             )
             interpreter_label = interpreter_label or f"{DEFAULT_INTERPRETER_PROVIDER}:{DEFAULT_INTERPRETER_MODEL}"
-        judge_provider = create_judge_provider()
+        if judge_provider is None:
+            judge_provider = build_judge_provider(DEFAULT_JUDGE_PROVIDER, DEFAULT_JUDGE_MODEL)
+            judge_label = judge_label or f"{DEFAULT_JUDGE_PROVIDER}:{DEFAULT_JUDGE_MODEL}"
     except Exception as e:
         print(f"Failed to initialize providers: {e}")
         return
 
     print(f"Interpreter: {interpreter_label}")
+    print(f"Judge:       {judge_label}")
 
     if not remaining:
         print("All samples already evaluated. Nothing to do.")
@@ -204,16 +267,17 @@ def run_simulation_sample(
         try:
             if source_lang == "arb":
                 user_a_provider = create_ar_model_provider()
-                user_a_constraint = "مهم جداً: أنت تتحدث وتفهم اللغة العربية فقط. إذا تلقيت رسالة بلغة أخرى، يجب أن ترد بالعربية قائلاً إنك تفهم العربية فقط."
                 user_a_lang_full = "Arabic"
             elif source_lang == "ind":
                 user_a_provider = create_id_model_provider()
-                user_a_constraint = "PENTING: Anda HANYA bisa berbicara dan memahami Bahasa Indonesia. Jika Anda menerima input dalam bahasa lain, Anda harus menjawab dalam Bahasa Indonesia mengatakan bahwa Anda hanya mengerti Bahasa Indonesia."
                 user_a_lang_full = "Indonesian"
             elif source_lang == "kor":
                 user_a_provider = create_kr_model_provider()
-                user_a_constraint = "중요: 당신은 한국어만 말하고 이해할 수 있습니다. 다른 언어로 입력을 받으면 한국어로만 이해할 수 있다고 한국어로 대답해야 합니다."
                 user_a_lang_full = "Korean"
+            elif source_lang == "ben":
+                # User A is is_llm=False — provider is never called; None is safe.
+                user_a_provider = None
+                user_a_lang_full = "Bengali"
             else:
                 print(
                     f"  Skipping sample {sample_index}: Unknown source language {source_lang}"
@@ -222,16 +286,16 @@ def run_simulation_sample(
 
             if target_lang == "ind":
                 user_b_provider = create_id_model_provider()
-                user_b_constraint = "PENTING: Anda HANYA bisa berbicara dan memahami Bahasa Indonesia. Jika Anda menerima input dalam bahasa lain, Anda harus menjawab dalam Bahasa Indonesia mengatakan bahwa Anda hanya mengerti Bahasa Indonesia."
                 user_b_lang_full = "Indonesian"
             elif target_lang == "kor":
                 user_b_provider = create_kr_model_provider()
-                user_b_constraint = "중요: 당신은 한국어만 말하고 이해할 수 있습니다. 다른 언어로 입력을 받으면 한국어로만 이해할 수 있다고 한국어로 대답해야 합니다."
                 user_b_lang_full = "Korean"
             elif target_lang == "arb":
                 user_b_provider = create_ar_model_provider()
-                user_b_constraint = "مهم جداً: أنت تتحدث وتفهم اللغة العربية فقط. إذا تلقيت رسالة بلغة أخرى، يجب أن ترد بالعربية قائلاً إنك تفهم العربية فقط."
                 user_b_lang_full = "Arabic"
+            elif target_lang == "ben":
+                user_b_provider = create_bn_model_provider()
+                user_b_lang_full = "Bengali"
             else:
                 print(
                     f"  Skipping sample {sample_index}: Unknown target language {target_lang}"
@@ -263,17 +327,22 @@ def run_simulation_sample(
         user_a = User(
             name=f"User A ({user_a_lang_full})",
             language=source_lang,
+            language_name=user_a_lang_full,
             is_llm=False,
             llm_provider=user_a_provider,
-            context=f"{sample.get('user_a_context', '')}\n\n{user_a_constraint}",
+            context=sample.get("user_a_context", ""),
         )
 
+        # Strip the English "User B (target-side speaker). " prefix inserted by augmentation
+        raw_b_ctx = sample.get("user_b_context", "")
+        clean_b_ctx = raw_b_ctx.removeprefix("User B (target-side speaker). ")
         user_b = User(
             name=f"User B ({user_b_lang_full})",
             language=target_lang,
+            language_name=user_b_lang_full,
             is_llm=True,
             llm_provider=user_b_provider,
-            context=f"{sample.get('user_b_context', '')}\n\n{user_b_constraint}",
+            context=clean_b_ctx,
         )
 
         # Initialize EvaluationFramework
@@ -289,27 +358,44 @@ def run_simulation_sample(
         source_message = sample["source_text"]
         print(f"\n[{user_a.name}] sends: {source_message}")
 
+        translation_result = None
+        response_from_b = None
+        actual_user_b_context = clean_b_ctx  # tracks what context was actually used
+
+        def _is_context_size_error(exc: Exception) -> bool:
+            s = str(exc).lower()
+            return "context size" in s or "context_length" in s or "context window" in s or (
+                "400" in s and ("context" in s or "token" in s)
+            )
+
         try:
             # Run a single-turn conversation (User A -> Interpreter -> User B)
             evaluator.run_conversation([source_message], from_user=1)
-
-            # The conversation log now has the translation
-            translation_result = None
-            response_from_b = None
 
             if evaluator.conversation_log:
                 turn = evaluator.conversation_log[0]
                 translation_result = turn["translated_message"]
                 print(f"[Interpreter] Translation: {translation_result}")
 
-                # Now have User B generate a response to the translation
-                # User B already received the translation in their history
-                if user_b.conversation_history:
-                    # Build prompt for User B to respond
-                    response_from_b = user_b.send_message(
-                        ""
-                    )  # Empty message triggers LLM to generate response based on history
-                    print(f"[{user_b.name}] responds: {response_from_b}")
+                # Pass translation directly as the user-turn message; context/constraints
+                # are already in the system prompt via user_b._build_system_prompt().
+                try:
+                    response_from_b = user_b.send_message(translation_result)
+                except Exception as send_err:
+                    if _is_context_size_error(send_err):
+                        # Retry with truncated context (first 200 chars) to preserve persona
+                        # while fitting within model context window limits.
+                        truncated_ctx = clean_b_ctx[:200].rsplit(" ", 1)[0] if len(clean_b_ctx) > 200 else clean_b_ctx
+                        print(f"  Context size error, retrying with truncated context ({len(truncated_ctx)} chars)...")
+                        user_b.context = truncated_ctx
+                        actual_user_b_context = truncated_ctx
+                        try:
+                            response_from_b = user_b.send_message(translation_result)
+                        except Exception as retry_err:
+                            print(f"  Retry also failed: {retry_err}")
+                    else:
+                        raise
+                print(f"[{user_b.name}] responds: {response_from_b}")
             else:
                 print("No conversation log generated")
                 continue
@@ -355,16 +441,18 @@ def run_simulation_sample(
 
         # Save results
         result_entry = {
+            "record_id": _record_id(sample),
             "sample_index": sample_index,
             "timestamp": datetime.now().isoformat(),
             "interpreter": interpreter_label,
+            "judge": judge_label,
             "category": sample.get("Category"),
             "conversation_context": conversation_context,
             "source_lang": source_lang,
             "target_lang": target_lang,
             "source_text": source_message,
             "user_a_context": sample.get("user_a_context"),
-            "user_b_context": sample.get("user_b_context"),
+            "user_b_context": actual_user_b_context,
             "translated_text": (
                 translation_result if "translation_result" in locals() else None
             ),
@@ -430,6 +518,13 @@ def main():
         help="Path to an existing output .jsonl file to resume from (skips already-evaluated samples)",
     )
     parser.add_argument(
+        "--filter-target-lang",
+        dest="filter_target_lang",
+        default=None,
+        help="Only evaluate records where target_language_code matches this value (e.g. arb, kor, ind)",
+    )
+    # Interpreter
+    parser.add_argument(
         "--interpreter-provider",
         dest="interpreter_provider",
         default=DEFAULT_INTERPRETER_PROVIDER,
@@ -440,7 +535,35 @@ def main():
         "--interpreter-model",
         dest="interpreter_model",
         default=DEFAULT_INTERPRETER_MODEL,
-        help=f"Model name/ID for the interpreter agent (default: {DEFAULT_INTERPRETER_MODEL})",
+        help=f"Model for the interpreter agent (default: {DEFAULT_INTERPRETER_MODEL})",
+    )
+    parser.add_argument(
+        "--interpreter-thinking-level",
+        dest="interpreter_thinking_level",
+        default="minimal",
+        choices=["none", "minimal", "low", "medium", "high"],
+        help="Thinking level for Gemini interpreter (default: minimal)",
+    )
+    # Judge
+    parser.add_argument(
+        "--judge-provider",
+        dest="judge_provider",
+        default=DEFAULT_JUDGE_PROVIDER,
+        choices=["gemini", "openrouter", "openai"],
+        help=f"Provider for the judge LLM (default: {DEFAULT_JUDGE_PROVIDER})",
+    )
+    parser.add_argument(
+        "--judge-model",
+        dest="judge_model",
+        default=DEFAULT_JUDGE_MODEL,
+        help=f"Model for the judge LLM (default: {DEFAULT_JUDGE_MODEL})",
+    )
+    parser.add_argument(
+        "--judge-thinking-level",
+        dest="judge_thinking_level",
+        default=DEFAULT_JUDGE_THINKING_LEVEL,
+        choices=["none", "minimal", "low", "medium", "high"],
+        help=f"Thinking level for Gemini judge (default: {DEFAULT_JUDGE_THINKING_LEVEL})",
     )
     args = parser.parse_args()
 
@@ -455,15 +578,20 @@ def main():
         print("[!] GlotLID model not available - language verification disabled")
     print()
 
-    # Build interpreter provider once, shared across all data files
+    # Build providers once — shared across all data files
     interpreter_label = f"{args.interpreter_provider}:{args.interpreter_model}"
-    print(f"Interpreter: {interpreter_label}")
+    judge_label = f"{args.judge_provider}:{args.judge_model}"
+    print(f"Interpreter: {interpreter_label} (thinking={args.interpreter_thinking_level})")
+    print(f"Judge:       {judge_label} (thinking={args.judge_thinking_level})")
     try:
         interp_provider = build_interpreter_provider(
-            args.interpreter_provider, args.interpreter_model
+            args.interpreter_provider, args.interpreter_model, args.interpreter_thinking_level
+        )
+        judge_prov = build_judge_provider(
+            args.judge_provider, args.judge_model, args.judge_thinking_level
         )
     except Exception as e:
-        print(f"Failed to build interpreter provider: {e}")
+        print(f"Failed to build providers: {e}")
         return
 
     for data_path in args.data:
@@ -477,6 +605,9 @@ def main():
                 resume_file=args.resume,
                 interpreter_provider=interp_provider,
                 interpreter_label=interpreter_label,
+                filter_target_lang=args.filter_target_lang,
+                judge_provider=judge_prov,
+                judge_label=judge_label,
             )
         else:
             print(f"File not found: {data_path}")

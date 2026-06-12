@@ -19,12 +19,14 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import mean, median
+from statistics import mean, median, quantiles
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _opensubs_scoring import (
     Candidate,
+    WORTHINESS_COMPLEXITY_WEIGHT,
+    WORTHINESS_QUALITY_WEIGHT,
     compute_alignment_risk,
     compute_pair_similarities,
     has_digit,
@@ -188,16 +190,17 @@ def _build_preview_report(
         lines.append(f"| {reason} | {count} |")
     lines.append(f"\n## Top {min(preview_limit, len(selected))} Selected Candidates\n")
     lines.append(
-        "| segment_id | score | quality | complexity | align_risk | emb_sim | source_text | target_text | reasons |"
+        "| segment_id | score | quality | src_complexity | tgt_complexity | align_risk | emb_sim | source_text | target_text | reasons |"
     )
-    lines.append("|---:|---:|---:|---:|---:|---:|---|---|---|")
+    lines.append("|---:|---:|---:|---:|---:|---:|---:|---|---|---|")
     for c in selected[:preview_limit]:
         src = c.source_text.replace("|", "\\|")
         tgt = c.target_text.replace("|", "\\|")
         emb_text = f"{c.embedding_similarity:.4f}" if c.embedding_similarity >= 0 else "n/a"
         lines.append(
             f"| {c.segment_id} | {c.worthiness_score:.3f} | {c.quality_score:.3f} "
-            f"| {c.complexity_score:.3f} | {c.alignment_risk:.3f} | {emb_text} "
+            f"| {c.complexity_score:.3f} | {c.tgt_complexity_score:.3f} "
+            f"| {c.alignment_risk:.3f} | {emb_text} "
             f"| {src} | {tgt} | {', '.join(c.reasons).replace('|', chr(92) + '|')} |"
         )
     out_md.write_text("\n".join(lines), encoding="utf-8")
@@ -224,13 +227,18 @@ def run_preview(args: argparse.Namespace) -> None:
                 dropped[reason] += 1
                 continue
             step1_pass += 1
-            quality, complexity, alignment_risk, worthiness, reasons = step2_score(row, metrics)
+            quality, src_complexity, tgt_complexity, alignment_risk, worthiness_raw, reasons = step2_score(row, metrics)
             if alignment_risk > args.max_alignment_risk:
                 dropped["alignment_risk_gt_threshold"] += 1
                 continue
-            if worthiness < args.min_worthiness or complexity < args.min_complexity:
+            worthiness = worthiness_raw
+            tgt_worthiness = tgt_complexity * WORTHINESS_COMPLEXITY_WEIGHT + quality * WORTHINESS_QUALITY_WEIGHT
+            src_passes = worthiness >= args.min_worthiness and src_complexity >= args.min_complexity
+            tgt_passes = tgt_worthiness >= args.min_worthiness and tgt_complexity >= args.min_complexity
+            if not src_passes and not tgt_passes:
                 dropped["below_step2_threshold"] += 1
                 continue
+            direction = "both" if (src_passes and tgt_passes) else ("fwd" if src_passes else "rev")
             step2_pass += 1
             selected.append(Candidate(
                 segment_id=int(row.get("segment_id") or 0),
@@ -238,11 +246,14 @@ def run_preview(args: argparse.Namespace) -> None:
                 target_text=row["target_text"],
                 film_key=row.get("film_key") or "",
                 quality_score=quality,
-                complexity_score=complexity,
+                complexity_score=src_complexity,
+                tgt_complexity_score=tgt_complexity,
                 alignment_risk=alignment_risk,
                 worthiness_score=worthiness,
+                tgt_worthiness_score=tgt_worthiness,
                 embedding_similarity=-1.0,
                 reasons=reasons,
+                direction=direction,
             ))
 
     selected.sort(
@@ -297,13 +308,14 @@ def run_preview(args: argparse.Namespace) -> None:
     with out_tsv.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t")
         writer.writerow([
-            "segment_id", "worthiness_score", "complexity_score", "quality_score",
-            "alignment_risk", "embedding_similarity", "film_key", "reasons",
+            "segment_id", "worthiness_score", "src_complexity_score", "tgt_complexity_score",
+            "quality_score", "alignment_risk", "embedding_similarity", "film_key", "reasons",
             "source_text", "target_text",
         ])
         for c in selected[: args.top_tsv]:
             writer.writerow([
-                c.segment_id, f"{c.worthiness_score:.3f}", f"{c.complexity_score:.3f}",
+                c.segment_id, f"{c.worthiness_score:.3f}",
+                f"{c.complexity_score:.3f}", f"{c.tgt_complexity_score:.3f}",
                 f"{c.quality_score:.3f}", f"{c.alignment_risk:.3f}",
                 f"{c.embedding_similarity:.4f}" if c.embedding_similarity >= 0 else "",
                 c.film_key, ",".join(c.reasons), c.source_text, c.target_text,
@@ -320,10 +332,327 @@ def run_preview(args: argparse.Namespace) -> None:
     print(f"Step2 pass: {step2_pass}\nReport: {out_md}\nTop TSV: {out_tsv}")
 
 
+# ── score: step1+step2 only, no threshold, no LaBSE ─────────────────────────
+
+_SCORE_HEADER = [
+    "segment_id",
+    "src_complexity_score", "tgt_complexity_score",
+    "quality_score", "alignment_risk",
+    "worthiness_score", "tgt_worthiness_score",
+    "film_key", "reasons", "metadata_match_type",
+    "source_text", "target_text",
+]
+
+
+def run_score(args: argparse.Namespace) -> None:
+    """Step 1 + Step 2 scoring only. Saves every step-1-passing row with its scores.
+    No worthiness/complexity threshold. No LaBSE. Fast CPU-only pass.
+    Use 'filter' afterwards to apply thresholds and run LaBSE.
+    """
+    input_dir = args.input_dir.resolve()
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    segment_files = sorted(input_dir.glob(args.segment_glob))
+    if args.limit > 0:
+        segment_files = segment_files[: args.limit]
+    if not segment_files:
+        raise RuntimeError(f"No segment files found in {input_dir} matching {args.segment_glob}")
+
+    print(f"Found {len(segment_files)} segment files to score.", flush=True)
+    total_scored = 0
+
+    for i, input_file in enumerate(segment_files, start=1):
+        segment_name = input_file.stem
+        out_tsv = output_dir / f"{segment_name}_{args.output_tag}.tsv"
+        if args.skip_existing and out_tsv.exists():
+            print(f"[{i}/{len(segment_files)}] {segment_name} | skipped", flush=True)
+            continue
+
+        scored = 0
+        with input_file.open("r", encoding="utf-8", newline="") as f_in, \
+             out_tsv.open("w", encoding="utf-8", newline="") as f_out:
+            writer = csv.writer(f_out, delimiter="\t")
+            writer.writerow(_SCORE_HEADER)
+            for row in csv.DictReader(f_in, delimiter="\t"):
+                ok, _, metrics = step1_filter(row)
+                if not ok:
+                    continue
+                quality, src_c, tgt_c, risk, worthiness_raw, reasons = step2_score(row, metrics)
+                tgt_worthiness = tgt_c * WORTHINESS_COMPLEXITY_WEIGHT + quality * WORTHINESS_QUALITY_WEIGHT
+                writer.writerow([
+                    row.get("segment_id") or "",
+                    f"{src_c:.3f}", f"{tgt_c:.3f}",
+                    f"{quality:.3f}", f"{risk:.3f}",
+                    f"{worthiness_raw:.3f}", f"{tgt_worthiness:.3f}",
+                    row.get("film_key") or "",
+                    ",".join(reasons),
+                    row.get("metadata_match_type") or "",
+                    row.get("source_text") or "",
+                    row.get("target_text") or "",
+                ])
+                scored += 1
+
+        total_scored += scored
+        print(
+            f"[{i}/{len(segment_files)}] {segment_name} | scored={scored} | cumulative={total_scored}",
+            flush=True,
+        )
+
+    print(f"\n--- SCORE COMPLETE ---\nOutput dir: {output_dir}\nTotal rows scored: {total_scored}", flush=True)
+
+
+# ── filter: threshold + LaBSE on pre-scored TSVs ─────────────────────────────
+
+
+def _top_pct_threshold(values: List[float], top_pct: float) -> float:
+    """Return the minimum value that keeps the top `top_pct`% of `values`.
+
+    Works by cutting at the (100-top_pct)th percentile:
+    - top_pct=20  → threshold at 80th percentile → keeps top 20%
+    - top_pct=100 → -inf (everything passes)
+    - top_pct=0   → +inf (nothing passes)
+    """
+    if top_pct >= 100:
+        return float("-inf")
+    if top_pct <= 0 or not values:
+        return float("inf")
+    s = sorted(values)
+    cut = max(0, int(len(s) * (1.0 - top_pct / 100.0)))
+    return s[cut]
+
+
+def run_filter(args: argparse.Namespace) -> None:
+    """Apply worthiness/complexity thresholds and LaBSE filter to pre-scored TSVs.
+    Input directory must contain *_scored.tsv files produced by the 'score' command.
+    """
+    input_dir = args.input_dir.resolve()
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    min_src_complexity = args.min_src_complexity if args.min_src_complexity is not None else args.min_complexity
+    min_tgt_complexity = args.min_tgt_complexity if args.min_tgt_complexity is not None else args.min_complexity
+
+    scored_files = sorted(input_dir.glob(args.scored_glob))
+    if args.limit > 0:
+        scored_files = scored_files[: args.limit]
+    if not scored_files:
+        raise RuntimeError(f"No scored files found in {input_dir} matching {args.scored_glob}")
+
+    print(f"Found {len(scored_files)} scored files to filter.", flush=True)
+    model = None
+    if not args.skip_embedding:
+        print("\n--- LOADING LABSE MODEL ONCE ---", flush=True)
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer(args.embedding_model)
+        model.max_seq_length = args.embedding_max_seq_length
+        print("LaBSE loaded.\n", flush=True)
+    else:
+        print("Embedding filter skipped (--skip-embedding).\n", flush=True)
+
+    merged_rows: List[List] = []
+    cumulative_kept = 0
+
+    for i, scored_file in enumerate(scored_files, start=1):
+        file_stem = scored_file.stem
+        out_tsv = output_dir / f"{file_stem}_{args.output_tag}_filtered_top{args.top_tsv}.tsv"
+        if args.skip_existing and out_tsv.exists():
+            print(f"[{i}/{len(scored_files)}] {file_stem} | skipped", flush=True)
+            continue
+
+        # Pass 1: load every row that clears the alignment-risk hard filter.
+        # Worthiness thresholds are applied after this so that --top-k-pct can
+        # compute its cutoff from the full per-file score distribution.
+        raw_rows: List[Dict] = []
+        with scored_file.open("r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                risk = float(row.get("alignment_risk") or 0)
+                if risk > args.max_alignment_risk:
+                    continue
+                worthiness_raw = float(row.get("worthiness_score") or 0)
+                tgt_worthiness_raw = float(row.get("tgt_worthiness_score") or 0)
+                raw_rows.append({
+                    "src_c":          float(row.get("src_complexity_score") or 0),
+                    "tgt_c":          float(row.get("tgt_complexity_score") or 0),
+                    "quality":        float(row.get("quality_score") or 0),
+                    "risk":           risk,
+                    "worthiness":     worthiness_raw * args.worthiness_scale,
+                    "tgt_worthiness": tgt_worthiness_raw * args.worthiness_scale,
+                    "worthiness_raw": worthiness_raw,
+                    "segment_id":     int(row.get("segment_id") or 0),
+                    "source_text":    row.get("source_text") or "",
+                    "target_text":    row.get("target_text") or "",
+                    "film_key":       row.get("film_key") or "",
+                    "reasons":        [r for r in (row.get("reasons") or "").split(",") if r],
+                    "metadata_match_type": row.get("metadata_match_type") or "",
+                })
+
+        # Pass 2: compute effective worthiness thresholds — either per-file
+        # percentile (--top-k-pct) or the fixed CLI value (--min-worthiness).
+        if args.top_k_pct is not None:
+            src_w = [r["worthiness"] for r in raw_rows]
+            tgt_w = [r["tgt_worthiness"] for r in raw_rows]
+            eff_min_worth_src = _top_pct_threshold(src_w, args.top_k_pct)
+            eff_min_worth_tgt = _top_pct_threshold(tgt_w, args.top_k_pct)
+            print(
+                f"  top-{args.top_k_pct:.0f}%: "
+                f"src_worth≥{eff_min_worth_src:.3f}  tgt_worth≥{eff_min_worth_tgt:.3f}"
+                f"  (from {len(raw_rows)} risk-passing rows)",
+                flush=True,
+            )
+        else:
+            eff_min_worth_src = args.min_worthiness
+            eff_min_worth_tgt = args.min_worthiness
+
+        candidates: List[Candidate] = []
+        for r in raw_rows:
+            src_passes = r["src_c"] >= min_src_complexity and r["worthiness"] >= eff_min_worth_src
+            tgt_passes = r["tgt_c"] >= min_tgt_complexity and r["tgt_worthiness"] >= eff_min_worth_tgt
+            if not src_passes and not tgt_passes:
+                continue
+            direction = "both" if (src_passes and tgt_passes) else ("fwd" if src_passes else "rev")
+            candidates.append(Candidate(
+                segment_id=r["segment_id"],
+                source_text=r["source_text"],
+                target_text=r["target_text"],
+                film_key=r["film_key"],
+                quality_score=r["quality"],
+                complexity_score=r["src_c"],
+                tgt_complexity_score=r["tgt_c"],
+                alignment_risk=r["risk"],
+                worthiness_score=r["worthiness"],
+                tgt_worthiness_score=r["tgt_worthiness"],
+                embedding_similarity=-1.0,
+                reasons=r["reasons"],
+                direction=direction,
+                metadata_match_type=r["metadata_match_type"],
+                worthiness_raw_score=r["worthiness_raw"],
+            ))
+
+        # Pre-embedding cap: sort by worthiness and take top-N before running LaBSE.
+        # This keeps LaBSE inference fast (N rows per chunk instead of all candidates).
+        if args.pre_embed_top > 0 and not args.skip_embedding:
+            candidates.sort(key=lambda c: -max(c.worthiness_score, c.tgt_worthiness_score))
+            candidates = candidates[: args.pre_embed_top]
+
+        kept: List[Candidate] = []
+        if candidates:
+            if args.skip_embedding:
+                kept = candidates
+            else:
+                pair_rows = [{"source_text": c.source_text, "target_text": c.target_text} for c in candidates]
+                sims = compute_pair_similarities(
+                    model, pair_rows,
+                    batch_size=args.embedding_batch_size,
+                    max_chars=args.embedding_max_chars,
+                )
+                for c, sim in zip(candidates, sims):
+                    if args.embedding_min_sim <= sim < args.embedding_max_sim:
+                        c.embedding_similarity = sim
+                        kept.append(c)
+
+        if args.top_fwd > 0 or args.top_rev > 0:
+            # Per-direction selection: each direction competes only against itself.
+            # "both" rows are eligible for both pools; included at most once.
+            top_fwd = args.top_fwd if args.top_fwd > 0 else args.top_tsv
+            top_rev = args.top_rev if args.top_rev > 0 else args.top_tsv
+            fwd_pool = sorted(
+                [c for c in kept if c.direction in ("fwd", "both")],
+                key=lambda c: (-c.worthiness_score, -c.embedding_similarity, c.alignment_risk),
+            )[:top_fwd]
+            rev_pool = sorted(
+                [c for c in kept if c.direction in ("rev", "both")],
+                key=lambda c: (-c.tgt_worthiness_score, -c.embedding_similarity, c.alignment_risk),
+            )[:top_rev]
+            seen: set = set()
+            selected = []
+            for c in fwd_pool + rev_pool:
+                if id(c) not in seen:
+                    seen.add(id(c))
+                    selected.append(c)
+        else:
+            kept.sort(key=lambda x: (
+                -max(x.worthiness_score, x.tgt_worthiness_score),
+                -x.embedding_similarity,
+                x.alignment_risk,
+                -max(x.complexity_score, x.tgt_complexity_score),
+                x.segment_id,
+            ))
+            selected = kept[: args.top_tsv]
+        cumulative_kept += len(selected)
+
+        with out_tsv.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(_BULK_HEADER)
+            for c in selected:
+                row_out = [
+                    c.segment_id, c.direction,
+                    f"{c.worthiness_score:.3f}", f"{c.tgt_worthiness_score:.3f}",
+                    f"{c.worthiness_raw_score:.3f}",
+                    f"{c.complexity_score:.3f}", f"{c.tgt_complexity_score:.3f}",
+                    f"{c.quality_score:.3f}", f"{c.alignment_risk:.3f}",
+                    f"{c.embedding_similarity:.4f}",
+                    c.metadata_match_type, c.film_key, ",".join(c.reasons),
+                    c.source_text, c.target_text,
+                ]
+                writer.writerow(row_out)
+                merged_rows.append(row_out)
+
+        print(
+            f"[{i}/{len(scored_files)}] {file_stem} | "
+            f"candidates={len(candidates)} | kept(sim)={len(kept)} | saved={len(selected)} | cumulative={cumulative_kept}",
+            flush=True,
+        )
+
+    final_output = output_dir / f"final_filtered_{args.output_tag}.tsv"
+    with final_output.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(_BULK_HEADER)
+        writer.writerows(merged_rows)
+
+    if args.top_per_direction > 0 and merged_rows:
+        n = args.top_per_direction
+        hdr = _BULK_HEADER
+        dir_idx = hdr.index("direction")
+        w_idx = hdr.index("worthiness_score")
+        tw_idx = hdr.index("tgt_worthiness_score")
+        fwd_pool = sorted(
+            [r for r in merged_rows if r[dir_idx] in ("fwd", "both")],
+            key=lambda r: -float(r[w_idx]),
+        )[:n]
+        rev_pool = sorted(
+            [r for r in merged_rows if r[dir_idx] in ("rev", "both")],
+            key=lambda r: -float(r[tw_idx]),
+        )[:n]
+        seen: set = set()
+        kept_rows = []
+        for r in fwd_pool + rev_pool:
+            rid = id(r)
+            if rid not in seen:
+                seen.add(rid)
+                kept_rows.append(r)
+        final_top = output_dir / f"final_filtered_{args.output_tag}_top{n}pd.tsv"
+        with final_top.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(_BULK_HEADER)
+            writer.writerows(kept_rows)
+        fwd_n = sum(1 for r in kept_rows if r[dir_idx] in ("fwd", "both"))
+        rev_n = sum(1 for r in kept_rows if r[dir_idx] in ("rev", "both"))
+        print(
+            f"Top-per-direction ({n}): fwd-usable={fwd_n}  rev-usable={rev_n}  "
+            f"unique_rows={len(kept_rows)}\n{final_top}",
+            flush=True,
+        )
+
+    print(f"\n--- FILTER COMPLETE ---\nFinal: {final_output}\nTotal retained: {len(merged_rows)}", flush=True)
+
+
 # ── bulk: helpers ────────────────────────────────────────────────────────────
 
 _BULK_HEADER = [
-    "segment_id", "worthiness_score", "worthiness_raw_score", "complexity_score",
+    "segment_id", "direction",
+    "worthiness_score", "tgt_worthiness_score", "worthiness_raw_score",
+    "src_complexity_score", "tgt_complexity_score",
     "quality_score", "alignment_risk", "embedding_similarity", "metadata_match_type",
     "film_key", "reasons", "source_text", "target_text",
 ]
@@ -333,6 +662,9 @@ def run_bulk(args: argparse.Namespace) -> None:
     input_dir = args.input_dir.resolve()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    min_src_complexity = args.min_src_complexity if args.min_src_complexity is not None else args.min_complexity
+    min_tgt_complexity = args.min_tgt_complexity if args.min_tgt_complexity is not None else args.min_complexity
 
     segment_files = sorted(input_dir.glob(args.segment_glob))
     if args.limit > 0:
@@ -367,12 +699,17 @@ def run_bulk(args: argparse.Namespace) -> None:
                 if not ok:
                     continue
                 step1_pass += 1
-                quality, complexity, alignment_risk, worthiness_raw, reasons = step2_score(row, metrics)
-                worthiness = worthiness_raw * args.worthiness_scale
+                quality, src_complexity, tgt_complexity, alignment_risk, worthiness_raw, reasons = step2_score(row, metrics)
                 if alignment_risk > args.max_alignment_risk:
                     continue
-                if complexity < args.min_complexity or worthiness < args.min_worthiness:
+                worthiness = worthiness_raw * args.worthiness_scale
+                tgt_worthiness_raw = tgt_complexity * WORTHINESS_COMPLEXITY_WEIGHT + quality * WORTHINESS_QUALITY_WEIGHT
+                tgt_worthiness = tgt_worthiness_raw * args.worthiness_scale
+                src_passes = src_complexity >= min_src_complexity and worthiness >= args.min_worthiness
+                tgt_passes = tgt_complexity >= min_tgt_complexity and tgt_worthiness >= args.min_worthiness
+                if not src_passes and not tgt_passes:
                     continue
+                direction = "both" if (src_passes and tgt_passes) else ("fwd" if src_passes else "rev")
                 step2_pass += 1
                 candidates.append(Candidate(
                     segment_id=int(row.get("segment_id") or 0),
@@ -380,11 +717,14 @@ def run_bulk(args: argparse.Namespace) -> None:
                     target_text=row["target_text"],
                     film_key=row.get("film_key") or "",
                     quality_score=quality,
-                    complexity_score=complexity,
+                    complexity_score=src_complexity,
+                    tgt_complexity_score=tgt_complexity,
                     alignment_risk=alignment_risk,
                     worthiness_score=worthiness,
+                    tgt_worthiness_score=tgt_worthiness,
                     embedding_similarity=-1.0,
                     reasons=reasons,
+                    direction=direction,
                     metadata_match_type=row.get("metadata_match_type") or "",
                     worthiness_raw_score=worthiness_raw,
                 ))
@@ -407,8 +747,11 @@ def run_bulk(args: argparse.Namespace) -> None:
 
         kept.sort(
             key=lambda x: (
-                -x.worthiness_score, -x.embedding_similarity,
-                x.alignment_risk, -x.complexity_score, x.segment_id,
+                -max(x.worthiness_score, x.tgt_worthiness_score),
+                -x.embedding_similarity,
+                x.alignment_risk,
+                -max(x.complexity_score, x.tgt_complexity_score),
+                x.segment_id,
             )
         )
         selected = kept[: args.top_tsv]
@@ -419,9 +762,12 @@ def run_bulk(args: argparse.Namespace) -> None:
             writer.writerow(_BULK_HEADER)
             for c in selected:
                 row_out = [
-                    c.segment_id, f"{c.worthiness_score:.3f}", f"{c.worthiness_raw_score:.3f}",
-                    f"{c.complexity_score:.3f}", f"{c.quality_score:.3f}",
-                    f"{c.alignment_risk:.3f}", f"{c.embedding_similarity:.4f}",
+                    c.segment_id, c.direction,
+                    f"{c.worthiness_score:.3f}", f"{c.tgt_worthiness_score:.3f}",
+                    f"{c.worthiness_raw_score:.3f}",
+                    f"{c.complexity_score:.3f}", f"{c.tgt_complexity_score:.3f}",
+                    f"{c.quality_score:.3f}", f"{c.alignment_risk:.3f}",
+                    f"{c.embedding_similarity:.4f}",
                     c.metadata_match_type, c.film_key, ",".join(c.reasons),
                     c.source_text, c.target_text,
                 ]
@@ -440,6 +786,47 @@ def run_bulk(args: argparse.Namespace) -> None:
         writer = csv.writer(f, delimiter="\t")
         writer.writerow(_BULK_HEADER)
         writer.writerows(merged_rows)
+
+    if args.top_per_direction > 0 and merged_rows:
+        n = args.top_per_direction
+        hdr = _BULK_HEADER
+        dir_idx = hdr.index("direction")
+        w_idx = hdr.index("worthiness_score")
+        tw_idx = hdr.index("tgt_worthiness_score")
+
+        # fwd pool: rows where direction is fwd or both, ranked by src worthiness
+        fwd_pool = sorted(
+            [r for r in merged_rows if r[dir_idx] in ("fwd", "both")],
+            key=lambda r: -float(r[w_idx]),
+        )[:n]
+        # rev pool: rows where direction is rev or both, ranked by tgt worthiness
+        rev_pool = sorted(
+            [r for r in merged_rows if r[dir_idx] in ("rev", "both")],
+            key=lambda r: -float(r[tw_idx]),
+        )[:n]
+
+        # Union: keep each unique row at most once (identify by list identity)
+        seen: set = set()
+        kept_rows = []
+        for r in fwd_pool + rev_pool:
+            rid = id(r)
+            if rid not in seen:
+                seen.add(rid)
+                kept_rows.append(r)
+
+        final_top = output_dir / f"final_filtered_{args.output_tag}_top{n}pd.tsv"
+        with final_top.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(_BULK_HEADER)
+            writer.writerows(kept_rows)
+
+        fwd_n = sum(1 for r in kept_rows if r[dir_idx] in ("fwd", "both"))
+        rev_n = sum(1 for r in kept_rows if r[dir_idx] in ("rev", "both"))
+        print(
+            f"Top-per-direction ({n}): fwd-usable={fwd_n}  rev-usable={rev_n}  "
+            f"unique_rows={len(kept_rows)}\n{final_top}",
+            flush=True,
+        )
 
     print(f"\n--- RUN COMPLETE ---\nFinal: {final_output}\nTotal retained: {len(merged_rows)}", flush=True)
 
@@ -629,6 +1016,7 @@ def _context_slice(rows: List[Dict[str, str]], start: int, end: int) -> List[Dic
             "segment_id": int(r.get("segment_id") or 0),
             "source_text": (r.get("source_text") or "").strip(),
             "target_text": (r.get("target_text") or "").strip(),
+            "film_key": r.get("film_key") or "",
         }
         for r in rows[start:end]
     ]
@@ -691,9 +1079,11 @@ def run_windows(args: argparse.Namespace) -> None:
                     out_f.write(json.dumps({
                         "segment_file": seg_file.name,
                         "segment_id": sid,
+                        "direction": fr.get("direction") or "both",
                         "worthiness_score": float(fr.get("worthiness_score") or 0.0),
                         "worthiness_raw_score": float(fr.get("worthiness_raw_score") or 0.0),
-                        "complexity_score": float(fr.get("complexity_score") or 0.0),
+                        "src_complexity_score": float(fr.get("src_complexity_score") or 0.0),
+                        "tgt_complexity_score": float(fr.get("tgt_complexity_score") or 0.0),
                         "quality_score": float(fr.get("quality_score") or 0.0),
                         "alignment_risk": float(fr.get("alignment_risk") or 0.0),
                         "embedding_similarity": float(fr.get("embedding_similarity") or 0.0),
@@ -712,6 +1102,58 @@ def run_windows(args: argparse.Namespace) -> None:
     print(f"input_rows={len(final_rows)}", flush=True)
     print(f"matched_rows={len(matched)}", flush=True)
     print(f"unmatched_rows={len(final_rows) - len(matched)}", flush=True)
+    print(f"output={output_jsonl}", flush=True)
+
+
+def run_scene_filter(args: argparse.Namespace) -> None:
+    """Truncate context at film boundaries; drop rows whose same-film prev_context is empty."""
+    input_jsonl = args.input.resolve()
+    output_jsonl = args.output.resolve()
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+
+    total = kept = dropped = 0
+
+    with input_jsonl.open("r", encoding="utf-8") as in_f, \
+         output_jsonl.open("w", encoding="utf-8") as out_f:
+        for line in in_f:
+            line = line.strip()
+            if not line:
+                continue
+            total += 1
+            rec = json.loads(line)
+
+            target_film = rec.get("film_key") or ""
+
+            # prev_context is ordered oldest→newest; keep contiguous block nearest to target
+            prev = rec.get("prev_context") or []
+            keep_from = 0
+            for i in range(len(prev) - 1, -1, -1):
+                if (prev[i].get("film_key") or "") != target_film:
+                    keep_from = i + 1
+                    break
+            truncated_prev = prev[keep_from:]
+
+            if not truncated_prev:
+                dropped += 1
+                continue
+
+            # after_context is ordered newest→oldest (closest first); keep contiguous block
+            after = rec.get("after_context") or []
+            keep_to = len(after)
+            for i in range(len(after)):
+                if (after[i].get("film_key") or "") != target_film:
+                    keep_to = i
+                    break
+            truncated_after = after[:keep_to]
+
+            rec["prev_context"] = truncated_prev
+            rec["after_context"] = truncated_after
+            out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            kept += 1
+
+    print(f"total={total}", flush=True)
+    print(f"kept={kept}", flush=True)
+    print(f"dropped_no_same_film_prev={dropped}", flush=True)
     print(f"output={output_jsonl}", flush=True)
 
 
@@ -770,14 +1212,82 @@ def main() -> None:
     p_bulk.add_argument("--limit", type=int, default=0, help="Max segment files to process. 0=all.")
     p_bulk.add_argument("--min-worthiness", type=float, default=6.0)
     p_bulk.add_argument("--worthiness-scale", type=float, default=2.0)
-    p_bulk.add_argument("--min-complexity", type=float, default=2.0)
+    p_bulk.add_argument("--min-complexity", type=float, default=2.0,
+                        help="Fallback complexity threshold (overridden by --min-src/tgt-complexity).")
+    p_bulk.add_argument("--min-src-complexity", type=float, default=None,
+                        help="Minimum source-side complexity for fwd direction. Defaults to --min-complexity.")
+    p_bulk.add_argument("--min-tgt-complexity", type=float, default=None,
+                        help="Minimum target-side complexity for rev direction. Defaults to --min-complexity.")
     p_bulk.add_argument("--max-alignment-risk", type=float, default=1.6)
     p_bulk.add_argument("--embedding-min-sim", type=float, default=0.60)
     p_bulk.add_argument("--embedding-max-sim", type=float, default=0.80)
     p_bulk.add_argument("--top-tsv", type=int, default=500)
+    p_bulk.add_argument("--top-per-direction", type=int, default=0,
+                        metavar="N", help="After merging, keep top N rows per direction (0=no limit).")
     p_bulk.add_argument("--output-tag", type=str, default="worthiness6_labse060_080")
     p_bulk.add_argument("--skip-existing", action="store_true")
     _add_embedding_args(p_bulk)
+
+    # ── score ─────────────────────────────────────────────────────────────────
+    p_score = sub.add_parser(
+        "score",
+        help="Step1+Step2 only: save all passing rows with scores. No threshold, no LaBSE.",
+    )
+    p_score.add_argument("--input-dir", type=Path, required=True)
+    p_score.add_argument(
+        "--output-dir", type=Path,
+        default=repo_root / "outputs" / "opensubtitles_scored_raw",
+    )
+    p_score.add_argument("--segment-glob", type=str, default="segments_*.tsv")
+    p_score.add_argument("--limit", type=int, default=0)
+    p_score.add_argument("--output-tag", type=str, default="scored")
+    p_score.add_argument("--skip-existing", action="store_true")
+
+    # ── filter ────────────────────────────────────────────────────────────────
+    p_filt = sub.add_parser(
+        "filter",
+        help="Apply thresholds + LaBSE to pre-scored TSVs from the 'score' command.",
+    )
+    p_filt.add_argument("--input-dir", type=Path, required=True,
+                        help="Directory of *_scored.tsv files from 'score' command.")
+    p_filt.add_argument(
+        "--output-dir", type=Path,
+        default=repo_root / "outputs" / "opensubtitles_filtered",
+    )
+    p_filt.add_argument("--scored-glob", type=str, default="segments_*_scored.tsv")
+    p_filt.add_argument("--limit", type=int, default=0)
+    p_filt.add_argument("--min-worthiness", type=float, default=2.0)
+    p_filt.add_argument(
+        "--top-k-pct", type=float, default=None, metavar="K",
+        help=(
+            "Select top K%% of segments by worthiness, with the threshold computed "
+            "from each file's own score distribution (e.g. --top-k-pct 20 keeps the "
+            "top 20%% of each scored file). Overrides --min-worthiness. "
+            "--min-complexity still applies as an absolute floor."
+        ),
+    )
+    p_filt.add_argument("--worthiness-scale", type=float, default=1.0)
+    p_filt.add_argument("--min-complexity", type=float, default=2.0)
+    p_filt.add_argument("--min-src-complexity", type=float, default=None)
+    p_filt.add_argument("--min-tgt-complexity", type=float, default=None)
+    p_filt.add_argument("--max-alignment-risk", type=float, default=1.6)
+    p_filt.add_argument("--embedding-min-sim", type=float, default=0.60)
+    p_filt.add_argument("--embedding-max-sim", type=float, default=0.80)
+    p_filt.add_argument("--top-tsv", type=int, default=500,
+                        help="Fallback per-chunk cap when --top-fwd/--top-rev are not set.")
+    p_filt.add_argument("--top-fwd", type=int, default=0,
+                        help="Per-chunk cap for fwd-usable rows (0 = use --top-tsv).")
+    p_filt.add_argument("--top-rev", type=int, default=0,
+                        help="Per-chunk cap for rev-usable rows (0 = use --top-tsv).")
+    p_filt.add_argument("--top-per-direction", type=int, default=0)
+    p_filt.add_argument("--output-tag", type=str, default="filtered")
+    p_filt.add_argument("--skip-existing", action="store_true")
+    p_filt.add_argument("--skip-embedding", action="store_true",
+                        help="Skip LaBSE similarity filter; pass all threshold-passing candidates through.")
+    p_filt.add_argument("--pre-embed-top", type=int, default=0, metavar="N",
+                        help="Sort candidates by worthiness and keep only the top N before running LaBSE "
+                             "(0 = no pre-cap; all threshold-passing candidates go through embedding).")
+    _add_embedding_args(p_filt)
 
     # ── refilter ──────────────────────────────────────────────────────────────
     p_ref = sub.add_parser("refilter", help="Apply embedding filter to an already-scored TSV.")
@@ -805,12 +1315,25 @@ def main() -> None:
     p_win.add_argument("--n-prev", type=int, default=15, help="Context lines before the target segment.")
     p_win.add_argument("--n-after", type=int, default=2, help="Context lines after the target segment.")
 
+    # ── scene-filter ──────────────────────────────────────────────────────────
+    p_sf = sub.add_parser(
+        "scene-filter",
+        help="Truncate context windows at film boundaries; drop rows with no same-film prev context.",
+    )
+    p_sf.add_argument("--input", type=Path, required=True,
+                      help="Input JSONL from 'windows' command.")
+    p_sf.add_argument("--output", type=Path, required=True,
+                      help="Output JSONL path.")
+
     args = parser.parse_args()
     {
         "preview": run_preview,
+        "score": run_score,
+        "filter": run_filter,
         "bulk": run_bulk,
         "refilter": run_refilter,
         "windows": run_windows,
+        "scene-filter": run_scene_filter,
     }[args.command](args)
 
 
