@@ -213,3 +213,8 @@ examples/output/
 # Data and outputs
 data/
 outputs/
+
+# Research/analysis scripts and docs — kept out of git, moved to the laptop
+# manually alongside data/ and outputs/. See research/README.md.
+research/
+docs/
