@@ -1,5 +1,6 @@
 """Google AI Studio provider implementation."""
 
+import threading
 from typing import Optional
 from .base import LLMProvider
 
@@ -27,10 +28,18 @@ class GoogleAIProvider(LLMProvider):
         self.model_name = model_name
         self.default_params = default_params
         self._client = None
+        # Guards lazy init so concurrent first-calls (pipeline thread pool) don't
+        # each build a Client; an orphaned Client gets GC'd and closes its shared
+        # httpx pool, surfacing as "client has been closed" in the live thread.
+        self._client_lock = threading.Lock()
 
     def _initialize_client(self):
-        """Lazy initialization of the Google AI client."""
-        if self._client is None:
+        """Lazy, thread-safe initialization of the Google AI client."""
+        if self._client is not None:
+            return
+        with self._client_lock:
+            if self._client is not None:
+                return
             try:
                 from google import genai
 
