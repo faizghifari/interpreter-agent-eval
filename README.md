@@ -19,7 +19,7 @@ This project is managed with [uv](https://github.com/astral-sh/uv).
 uv sync
 
 # Run evaluation scripts
-uv run python scripts/run_custom_eval.py
+uv run python scripts/run_eval.py
 ```
 
 ## Quick Start
@@ -34,7 +34,7 @@ cp .env.example .env
 The framework is designed for large-scale evaluation using predefined scenarios in JSONL format.
 
 ```bash
-uv run python scripts/run_custom_eval.py --data data/enriched/id_kr.jsonl --num_samples 5
+uv run python scripts/run_eval.py --data data/enriched/id_kr.jsonl --num_samples 5
 ```
 
 ### 3. Generate MAPS-Based Pragmatic Augmentation Data
@@ -53,13 +53,13 @@ Optional simulation/evaluation model:
 
 ```bash
 # Generate ind->kor and ind->arb data from MAPS test split
-uv run python scripts/augment_maps_data.py \
+uv run python scripts/generate_maps_scenarios.py \
   --seed-xlsx data/MAPS_Final/id/test_proverbs.xlsx \
   --seed-split test_proverbs \
   --targets kor,arb
 
 # Generate limited rows, then run simulation/evaluation on first N samples
-uv run python scripts/augment_maps_data.py \
+uv run python scripts/generate_maps_scenarios.py \
   --limit 20 \
   --run-eval \
   --eval-samples 5
