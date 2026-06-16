@@ -105,6 +105,96 @@ def model_label(interpreter: Optional[str]) -> str:
     return INTERPRETER_LABEL.get(interpreter, interpreter)
 
 
+# ---------------------------------------------------------------------------
+# Canonical model slugs (the `model` field in outputs/results/) — the reliable
+# key. Prefer these over parsing the unreliable `interpreter` string (e.g.
+# gpt-5.4-mini is mislabeled openai:gemini-3.1-pro-preview in raw records).
+# ---------------------------------------------------------------------------
+
+MODEL_SLUG_LABEL = {
+    "gemini-pro": "Gemini Pro",
+    "gemini-flash-lite": "Gemini Flash Lite",
+    "qwen3.5-flash": "Qwen3.5 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "gpt-5.4-mini": "GPT-5.4 Mini",
+    "aya": "Aya",
+    "nllb-200-3.3B": "NLLB-200 3.3B",
+    "google-web": "Google Translate",
+    "seamless-m4t-v2-large": "SeamlessM4T v2",
+}
+
+# Display order: LLM interpreters (strong→light) then dedicated MT systems.
+MODEL_SLUG_ORDER = [
+    "gemini-pro", "deepseek-v4-pro", "gpt-5.4-mini",
+    "gemini-flash-lite", "deepseek-v4-flash", "qwen3.5-flash",
+    "aya", "google-web", "nllb-200-3.3B", "seamless-m4t-v2-large",
+]
+
+MODEL_SLUG_COLORS = {
+    "gemini-pro": "#1A73E8", "gemini-flash-lite": "#4285F4",
+    "deepseek-v4-pro": "#7B1FA2", "deepseek-v4-flash": "#AB47BC",
+    "gpt-5.4-mini": "#34A853", "qwen3.5-flash": "#EA4335",
+    "aya": "#FF7043", "google-web": "#FBBC04",
+    "nllb-200-3.3B": "#00897B", "seamless-m4t-v2-large": "#5C6BC0",
+}
+
+
+def model_label_from_slug(slug: Optional[str]) -> str:
+    """Display label for a canonical `model` slug from outputs/results/."""
+    if not slug:
+        return "Unknown"
+    return MODEL_SLUG_LABEL.get(slug, slug)
+
+
+# ---------------------------------------------------------------------------
+# Criterion → (layer, cluster) mapping from annotation_clusters. This is the
+# canonical layer source used across the analyses (matches analyze_consolidated):
+# criteria not found in any cluster are treated as "trap" (decoy) criteria.
+# ---------------------------------------------------------------------------
+
+def normalize_criteria(text: Optional[str]) -> str:
+    """Normalize criteria text (handles 'interpreter's response' vs 'translation')."""
+    return (text or "").replace("the interpreter's response", "the translation").strip()
+
+
+def load_cluster_layer_map(
+    clusters_dir: Path,
+) -> Dict[Tuple[str, str, str], Dict[str, Tuple[str, int]]]:
+    """Build {(src, tgt, segment_id): {normalized_criteria: (layer, cluster_idx)}}
+    from ``outputs/annotation_clusters/<pair>/<src>_<tgt>.jsonl`` files."""
+    base = Path(clusters_dir)
+    out: Dict[Tuple[str, str, str], Dict[str, Tuple[str, int]]] = {}
+    if not base.exists():
+        return out
+    for pair_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        for fp in sorted(pair_dir.glob("*.jsonl")):
+            parts = fp.stem.split("_")
+            if len(parts) < 2:
+                continue
+            src, tgt = parts[0], parts[1]
+            with open(fp, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    seg = str(obj.get("segment_id"))
+                    layers = obj.get("layers")
+                    if isinstance(layers, str):
+                        layers = json.loads(layers)
+                    cm: Dict[str, Tuple[str, int]] = {}
+                    for layer_name, layer_data in (layers or {}).items():
+                        for ci, clust in enumerate(layer_data.get("clusters", [])):
+                            for ct in clust.get("criteria", []):
+                                cm[normalize_criteria(ct)] = (layer_name, ci)
+                    out[(src, tgt, seg)] = cm
+    return out
+
+
 def lang_display(code: str) -> str:
     return LANG_DISPLAY.get(code, code.upper())
 

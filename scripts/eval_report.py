@@ -54,6 +54,9 @@ from eval_utils import (
     LAYER_ORDER,
     MODEL_COLORS,
     MODEL_ORDER,
+    MODEL_SLUG_COLORS,
+    MODEL_SLUG_LABEL,
+    MODEL_SLUG_ORDER,
     bootstrap_mean_ci,
     compute_dual_rates,
     default_augmented_dir,
@@ -64,9 +67,12 @@ from eval_utils import (
     discover_eval_files,
     discover_legacy_eval_files,
     lang_display,
+    load_cluster_layer_map,
     load_layer_map,
     load_legacy_layer_map,
     model_label,
+    model_label_from_slug,
+    normalize_criteria,
     opensubs_dataset_name,
     parse_record_id,
     project_root,
@@ -90,6 +96,29 @@ BUCKET_LABELS = ["= 0", "(0, 0.5]", "(0.5, 0.8]", "(0.8, 1)", "= 1"]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Analyse interpreter-agent eval results (new + legacy layouts)."
+    )
+    parser.add_argument(
+        "--source",
+        choices=["store", "legacy"],
+        default="store",
+        help="Data source. 'store' (default) = unified outputs/results/ "
+             "(all 10 models, canonical `model` field). 'legacy' = the old "
+             "opensubs_eval + outputs/eval_*.jsonl discovery.",
+    )
+    parser.add_argument(
+        "--results-dir",
+        default=str(project_root() / "outputs" / "results"),
+        help="Unified results store (used when --source store).",
+    )
+    parser.add_argument(
+        "--clusters-dir",
+        default=str(project_root() / "outputs" / "annotation_clusters"),
+        help="annotation_clusters dir for layer mapping (used when --source store).",
+    )
+    parser.add_argument(
+        "--no-synthetic",
+        action="store_true",
+        help="Exclude synthetic translation-failure fills (store mode only).",
     )
     parser.add_argument(
         "--opensubs-eval-dir",
@@ -274,6 +303,70 @@ def build_dataframes(
     df = pd.DataFrame(rec_rows)
     df_crit = pd.DataFrame(crit_rows)
     return df, df_crit
+
+
+# ---------------------------------------------------------------------------
+# Unified results-store layout (outputs/results/) — the canonical source.
+# Keys models off the reliable `model` slug (NOT the unreliable `interpreter`),
+# layers via annotation_clusters (layer_1/2/3 -> L1/L2/L3; unmatched -> None,
+# matching the legacy "criterion not in any layer" behaviour).
+# ---------------------------------------------------------------------------
+
+T3_TO_T2 = {"arb": "ar", "ben": "bn", "ind": "id", "kor": "ko", "eng": "en"}
+LAYER_SHORT = {"layer_1": "L1", "layer_2": "L2", "layer_3": "L3"}
+
+
+def _store_lang_pair(src: str, tgt: str) -> str:
+    a, b = T3_TO_T2.get(src, src), T3_TO_T2.get(tgt, tgt)
+    return "-".join(sorted([a, b]))
+
+
+def build_dataframes_from_store(
+    results_dir: Path,
+    clusters_dir: Path,
+    include_synthetic: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Build (df, df_crit) from outputs/results/by_model/*.jsonl.
+
+    All records are OpenSubs-sourced. ``model`` is the canonical slug's display
+    label; ``synthetic_fill`` translation-failure records are included by default
+    (legitimate 0-score failures)."""
+    cmap = load_cluster_layer_map(Path(clusters_dir))
+    by_model = Path(results_dir) / "by_model"
+    rec_rows: List[dict] = []
+    crit_rows: List[dict] = []
+    for fp in sorted(by_model.glob("*.jsonl")):
+        with open(fp, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (not include_synthetic) and r.get("synthetic_fill"):
+                    continue
+                src = r.get("source_lang") or ""
+                tgt = r.get("target_lang") or ""
+                lp = _store_lang_pair(src, tgt)
+                dataset = opensubs_dataset_name(lp, tgt)
+                rec, crits = _record_row(
+                    r, dataset=dataset, dataset_source="OpenSubs",
+                    lang_pair=lp, model_tag="store",
+                    src_default=src, tgt_default=tgt,
+                )
+                model = model_label_from_slug(r.get("model"))
+                rec["model"] = model
+                seg = rec["record_id"].split("_")[0]
+                crit_map = cmap.get((src, tgt, seg), {})
+                for c in crits:
+                    c["model"] = model
+                    hit = crit_map.get(normalize_criteria(c["criteria_text"]))
+                    c["layer"] = LAYER_SHORT.get(hit[0]) if hit else None
+                rec_rows.append(rec)
+                crit_rows.extend(crits)
+    return pd.DataFrame(rec_rows), pd.DataFrame(crit_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +657,8 @@ def dataset_compare(df: pd.DataFrame, rate_col: str, n_boot: int) -> pd.DataFram
             "delta_maps_minus_opensubs": float(a.mean() - b.mean()),
             "z": z, "p_value": p,
         })
+    if not rows:
+        return pd.DataFrame()
     return pd.DataFrame(rows).sort_values(["direction", "model"]).reset_index(drop=True)
 
 
@@ -1403,6 +1498,26 @@ def main() -> None:
     print("=" * 70)
     print("Loading evaluation files…")
     print("=" * 70)
+
+    # ---- Unified store source (default) ----
+    if args.source == "store":
+        global MODEL_ORDER, MODEL_COLORS
+        MODEL_ORDER = [MODEL_SLUG_LABEL[s] for s in MODEL_SLUG_ORDER]
+        MODEL_COLORS = {MODEL_SLUG_LABEL[s]: MODEL_SLUG_COLORS[s]
+                        for s in MODEL_SLUG_ORDER}
+        print(f"\n[results store]  {args.results_dir}")
+        df, df_crit = build_dataframes_from_store(
+            Path(args.results_dir), Path(args.clusters_dir),
+            include_synthetic=not args.no_synthetic,
+        )
+        print(f"\n{len(df)} records loaded · {len(df_crit)} criterion "
+              f"observations · {df['model'].nunique()} models.")
+        if not df_crit.empty and df_crit["layer"].notna().any():
+            cov = df_crit["layer"].notna().mean()
+            print(f"  Layer coverage: {cov:.1%} of criteria mapped to a layer.")
+        _run_analysis(args, out_dir, df, df_crit)
+        return
+
     eval_files = discover_eval_files(Path(args.opensubs_eval_dir))
     if eval_files:
         print(f"\n[opensubs_eval]  {len(eval_files)} files")
@@ -1439,6 +1554,11 @@ def main() -> None:
     else:
         print("  WARNING: 0 criteria mapped to a layer.")
 
+    _run_analysis(args, out_dir, df, df_crit)
+
+
+def _run_analysis(args, out_dir: Path, df: pd.DataFrame,
+                  df_crit: pd.DataFrame) -> None:
     # Only the new opensubs_eval files are expected to carry a record_id;
     # legacy outputs used sample_index instead. Restrict the sanity check
     # to non-legacy rows so we don't false-alarm on legacy data.
