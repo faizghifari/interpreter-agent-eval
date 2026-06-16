@@ -4,6 +4,86 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass
 
 
+# Arabic varieties (ISO 639-3) that GlotLID may emit. For an Arabic target we
+# accept ANY of these as correct: MSA, the macrolanguage, and the regional
+# dialects are all legitimately "Arabic" for this evaluation.
+ARABIC_VARIETIES = {
+    "ara",  # Arabic (macrolanguage)
+    "arb",  # Standard Arabic (MSA)
+    "arz",  # Egyptian
+    "apc",  # North Levantine
+    "ajp",  # South Levantine
+    "afb",  # Gulf
+    "ary",  # Moroccan
+    "ars",  # Najdi
+    "acm",  # Mesopotamian / Iraqi
+    "acq",  # Ta'izzi-Adeni
+    "aeb",  # Tunisian
+    "apd",  # Sudanese
+    "ayl",  # Libyan
+    "acw",  # Hijazi
+    "acx",  # Omani
+    "acy",  # Cypriot
+    "aec",  # Saidi
+    "abv",  # Baharna
+    "avl",  # Eastern Egyptian Bedawi
+    "shu",  # Chadian
+    "ssh",  # Shihhi
+    "arq",  # Algerian
+    "aao",  # Algerian Saharan
+    "abh",  # Tajiki Arabic
+    "pga",  # Sudanese Creole Arabic
+}
+
+# Languages closely related to / easily confused with Indonesian by GlotLID,
+# split by how we treat them for an Indonesian target:
+#
+# INDONESIAN_MALAY_ACCEPT — Betawi and the Malay cluster. These are mutually
+# intelligible with / structurally the same as standard Indonesian, so a
+# detection here is accepted outright as correct (no review flag).
+INDONESIAN_MALAY_ACCEPT = {
+    "msa",  # Malay (macrolanguage)
+    "zsm",  # Standard Malay
+    "zlm",  # Malay (individual)
+    "max",  # North Moluccan Malay
+    "xmm",  # Manado Malay
+    "mui",  # Musi (Malay variety)
+    "bew",  # Betawi
+    "pse",  # Central Malay
+    "abs",  # Ambonese Malay
+    "lrt",  # Larantuka Malay
+}
+
+# INDONESIAN_REGIONAL_REVIEW — genuinely distinct regional languages of
+# Indonesia (Batak group, Javanese, Sundanese, Minangkabau, Banjar, ...). These
+# are NOT marked wrong, but flagged for manual review because GlotLID may confuse
+# them with Indonesian and a real translation into them would be a genuine error.
+INDONESIAN_REGIONAL_REVIEW = {
+    "min",  # Minangkabau
+    "bjn",  # Banjar
+    # Batak group
+    "btk",  # Batak (macrolanguage)
+    "bbc",  # Toba Batak
+    "btm",  # Mandailing Batak
+    "btx",  # Karo Batak
+    "bts",  # Simalungun Batak
+    "btd",  # Dairi Batak
+    # Other major regional languages of Indonesia
+    "jav",  # Javanese
+    "sun",  # Sundanese
+    "ban",  # Balinese
+    "bug",  # Buginese
+    "mad",  # Madurese
+    "ace",  # Acehnese
+    "mak",  # Makasar
+    "nij",  # Ngaju
+    "sas",  # Sasak
+    "gor",  # Gorontalo
+    "rej",  # Rejang
+    "ljp",  # Lampung Api
+}
+
+
 @dataclass
 class LanguageVerificationResult:
     """Result of language verification."""
@@ -14,6 +94,8 @@ class LanguageVerificationResult:
     confidence: float
     expected_language: str
     message: str
+    needs_review: bool = False
+    review_reason: str = ""
 
 
 def verify_language_with_glotlid(
@@ -91,15 +173,38 @@ def verify_language_with_glotlid(
         is_correct = (detected_iso == expected_iso_code) and (
             confidence >= min_confidence
         )
+        needs_review = False
+        review_reason = ""
 
-        # Special handling for Arabic (arb/ara)
-        # GlotLID may detect various Arabic dialects (ars, arz, apc, etc.)
-        # We accept any "Arab" script result with a slightly lower confidence threshold
-        if expected_iso_code in ["arb", "ara"] and not is_correct:
-            if detected_script == "Arab" and confidence >= 0.7:
+        # Special handling for Arabic (arb/ara): GlotLID emits many dialect
+        # labels (arz, apc, afb, ary, ars, ...) that are all legitimately
+        # Arabic. Accept ANY detected Arabic variety, or anything in the Arabic
+        # script, as correct regardless of which specific variety was predicted.
+        if not is_correct and expected_iso_code in ("arb", "ara"):
+            if detected_iso in ARABIC_VARIETIES or detected_script == "Arab":
                 is_correct = True
 
-        if not is_correct:
+        # Special handling for Indonesian (ind). GlotLID routinely confuses
+        # Indonesian with related languages:
+        #  - Betawi / Malay cluster -> accept outright (effectively Indonesian).
+        #  - Other regional languages (Batak, Javanese, Minangkabau, ...) ->
+        #    don't mark wrong, but flag for manual review.
+        if not is_correct and expected_iso_code == "ind":
+            if detected_iso in INDONESIAN_MALAY_ACCEPT:
+                is_correct = True
+            elif detected_iso in INDONESIAN_REGIONAL_REVIEW:
+                is_correct = True
+                needs_review = True
+                review_reason = (
+                    f"Detected closely-related language "
+                    f"{detected_iso}_{detected_script} (confidence: "
+                    f"{confidence:.2f}); flagged for manual review instead of "
+                    f"being marked incorrect."
+                )
+
+        if needs_review:
+            message = f"{context_name}: REVIEW — {review_reason}"
+        elif not is_correct:
             if detected_iso != expected_iso_code:
                 message = f"{context_name}: Detected as {detected_iso}_{detected_script} (confidence: {confidence:.2f}), expected {expected_iso_code}"
             else:
@@ -114,6 +219,8 @@ def verify_language_with_glotlid(
             confidence=confidence,
             expected_language=expected_iso_code,
             message=message,
+            needs_review=needs_review,
+            review_reason=review_reason,
         )
 
     except Exception as e:

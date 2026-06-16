@@ -13,6 +13,17 @@ class LanguageCheckResult(BaseModel):
     confidence: float = Field(description="Confidence score (0.0-1.0)")
     expected_language: str = Field(description="Expected ISO 639-3 language code")
     message: str = Field(description="Verification message")
+    needs_review: bool = Field(
+        default=False,
+        description=(
+            "True when the detection is ambiguous and should be inspected "
+            "manually rather than treated as a hard pass/fail (e.g. an "
+            "Indonesian regional language detected for an Indonesian target)."
+        ),
+    )
+    review_reason: str = Field(
+        default="", description="Why the record was flagged for manual review"
+    )
 
 
 class JudgeCriterionResult(BaseModel):

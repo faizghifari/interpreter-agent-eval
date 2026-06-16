@@ -260,6 +260,8 @@ def _lang_check_dict(verification) -> Dict[str, Any]:
         confidence=verification.confidence,
         expected_language=verification.expected_language,
         message=verification.message,
+        needs_review=getattr(verification, "needs_review", False),
+        review_reason=getattr(verification, "review_reason", ""),
     ).model_dump()
 
 
@@ -304,9 +306,15 @@ def verify_record(
     if trans_check is not None and not trans_check["is_correct"]:
         passed = False
 
+    needs_review = bool(
+        (trans_check is not None and trans_check.get("needs_review"))
+        or (resp_check is not None and resp_check.get("needs_review"))
+    )
+
     out["translation_language_check"] = trans_check
     out["response_language_check"] = resp_check
     out["language_check_passed"] = passed
+    out["language_check_needs_review"] = needs_review
     return out
 
 
