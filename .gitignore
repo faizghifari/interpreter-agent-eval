@@ -218,3 +218,9 @@ outputs/
 # manually alongside data/ and outputs/. See research/README.md.
 research/
 docs/
+
+# poster-related stuff
+poster/
+scripts/poster/
+poster_export/
+scripts/export_poster_pptx.py

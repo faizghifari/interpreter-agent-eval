@@ -8,7 +8,7 @@ A comprehensive framework for evaluating LLM-powered interpreter agents that fac
 - **AI-as-Judge Evaluation**: Integrated evaluation framework with structured verification checklists and "Yes/No" metrics.
 - **Language Verification**: Built-in support for GlotLID to ensure users maintain monolingual behavior and avoid code-switching.
 - **Flexible Interactions**: Supports Human-to-Human, Human-to-AI, and AI-to-AI simulations.
-- **Standardized**: Uses ISO 639-3 three-letter language codes (e.g., `eng`, `spa`, `ind`, `kor`, `arb`).
+- **Standardized**: Uses ISO 639-3 three-letter language codes (e.g., `eng`, `ind`, `kor`, `arb`).
 
 ## Installation
 
@@ -119,7 +119,7 @@ If you use this framework in your research, please cite:
 ```bibtex
 @software{interpreter_agent_eval,
   title={Interpreter Agent Evaluation Framework},
-  author={Faiz Ghifari Haznitrama},
+  author={Faiz Ghifari Haznitrama, Alice Oh},
   year={2026},
   url={https://github.com/faizghifari/interpreter-agent-eval}
 }
