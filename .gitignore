@@ -138,6 +138,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+.venv-wsl
 env/
 venv/
 ENV/
@@ -208,3 +209,18 @@ __marimo__/
 *.env
 .env.*
 examples/output/
+
+# Data and outputs
+data/
+outputs/
+
+# Research/analysis scripts and docs — kept out of git, moved to the laptop
+# manually alongside data/ and outputs/. See research/README.md.
+research/
+docs/
+
+# poster-related stuff
+poster/
+scripts/poster/
+poster_export/
+scripts/export_poster_pptx.py
