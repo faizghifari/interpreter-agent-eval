@@ -52,6 +52,12 @@ class BatchClient(ABC):
     def poll(self, job_id: str) -> str:
         """Return a normalized state: pending/running/completed/failed."""
 
+    def progress(self, job_id: str) -> Optional[str]:
+        """Optional human-readable per-request progress (e.g. "83/120 done,
+        0 failed"). None if the provider doesn't expose it — Gemini's AI
+        Studio batch API only reports completion_stats on Vertex AI."""
+        return None
+
     @abstractmethod
     def collect(
         self, job_id: str, requests: List[BatchRequest]
@@ -87,6 +93,8 @@ class OpenAIBatchClient(BatchClient):
             body["temperature"] = cfg["temperature"]
         if cfg.get("max_tokens") is not None:
             body["max_tokens"] = cfg["max_tokens"]
+        if cfg.get("reasoning_effort") is not None:
+            body["reasoning_effort"] = cfg["reasoning_effort"]
         if cfg.get("json"):
             body["response_format"] = {"type": "json_object"}
         return body
@@ -119,6 +127,12 @@ class OpenAIBatchClient(BatchClient):
         if status in _OPENAI_FAIL:
             return FAILED
         return RUNNING
+
+    def progress(self, job_id: str) -> Optional[str]:
+        rc = self.client.batches.retrieve(job_id).request_counts
+        if rc is None:
+            return None
+        return f"{rc.completed}/{rc.total} done, {rc.failed} failed"
 
     def collect(
         self, job_id: str, requests: List[BatchRequest]
