@@ -179,8 +179,11 @@ def _drive_batch(
         if timeout is not None and time.time() - started > timeout:
             print(f"[{label}] poll timeout; job still running. Collect later.")
             return output_path
+        detail = client.progress(job["job_id"])
+        detail_str = f" ({detail})" if detail else ""
         print(
-            f"[{label}] job {job['job_id']} state={state}; waiting {poll_interval:.0f}s"
+            f"[{label}] job {job['job_id']} state={state}{detail_str}; "
+            f"waiting {poll_interval:.0f}s"
         )
         time.sleep(poll_interval)
         state = client.poll(job["job_id"])
