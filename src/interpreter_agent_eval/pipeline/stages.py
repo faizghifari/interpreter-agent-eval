@@ -246,9 +246,9 @@ def _collect_batch(
 
 
 def _translate_request(
-    record: Dict[str, Any], thinking_level: str
+    record: Dict[str, Any], thinking_level: str, condition: str = "cultural_context"
 ) -> Optional[BatchRequest]:
-    system, user = ops.build_translate_request(record)
+    system, user = ops.build_translate_request(record, condition)
     if user is None:
         return None
     return BatchRequest(
@@ -330,6 +330,8 @@ def run_translate(
     batch_client: Optional[BatchClient] = None,
     interpreter_provider: Any = None,
     interpreter_label: Optional[str] = None,
+    condition: str = "cultural_context",
+    api_key: Optional[str] = None,
 ) -> str:
     records = read_jsonl(input_path)
     label_str = interpreter_label or registry.label_for(provider_type, model_name)
@@ -367,7 +369,7 @@ def run_translate(
         label_str = provider.label()
 
         def fn(r):
-            return ops.translate_record(r, provider, label_str)
+            return ops.translate_record(r, provider, label_str, condition)
 
         return _drive(
             "translate",
@@ -401,11 +403,11 @@ def run_translate(
 
     if backend == "batch":
         if batch_client is None:
-            batch_client = build_batch_client(provider_type)
+            batch_client = build_batch_client(provider_type, api_key=api_key)
         return _drive_batch(
             "translate",
             records,
-            lambda r: _translate_request(r, thinking_level),
+            lambda r: _translate_request(r, thinking_level, condition),
             lambda r, text: ops.apply_translate_response(r, text, label_str),
             batch_client,
             provider_type,
@@ -424,7 +426,7 @@ def run_translate(
     interpreter_label = label_str
 
     def fn(r):
-        return ops.translate_record(r, interpreter_provider, interpreter_label)
+        return ops.translate_record(r, interpreter_provider, interpreter_label, condition)
 
     return _drive(
         "translate",
@@ -511,13 +513,14 @@ def run_judge(
     batch_client: Optional[BatchClient] = None,
     judge_provider: Any = None,
     judge_label: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> str:
     records = read_jsonl(input_path)
     label_str = judge_label or registry.label_for(provider_type, model_name)
 
     if backend == "batch":
         if batch_client is None:
-            batch_client = build_batch_client(provider_type)
+            batch_client = build_batch_client(provider_type, api_key=api_key)
         return _drive_batch(
             "judge",
             records,
