@@ -55,7 +55,25 @@ def _add_batch_args(sp):
     )
     sp.add_argument("--poll-interval", type=float, default=30.0)
     sp.add_argument("--batch-timeout", type=float, default=None)
+    sp.add_argument(
+        "--api-key-env",
+        default=None,
+        help="Name of an env var holding the provider API key to use for this "
+        "batch job (e.g. GEMINI_API_KEY_3), to spread jobs across multiple "
+        "keys/quotas. Defaults to the provider's usual env var.",
+    )
     sp.set_defaults(batch_wait=True)
+
+
+def _resolve_api_key(args) -> "str | None":
+    key_env = getattr(args, "api_key_env", None)
+    if not key_env:
+        return None
+    value = os.environ.get(key_env)
+    if not value:
+        print(f"Warning: env var {key_env} not set or empty; using provider default.")
+        return None
+    return value
 
 
 def _resolve_data_paths(paths):
@@ -101,6 +119,13 @@ def main():
     )
     sp.add_argument("--thinking-level", default="minimal", choices=_THINKING)
     sp.add_argument("--concurrency", type=int, default=4)
+    sp.add_argument(
+        "--condition",
+        default="cultural_context",
+        choices=["cultural_context", "direct_no_context", "direct_context", "spec_aware"],
+        help="Translation-brief ablation: cultural_context (default, production brief), "
+        "direct_no_context, direct_context, or spec_aware",
+    )
     _add_batch_args(sp)
 
     # respond
@@ -149,6 +174,12 @@ def main():
     sp.add_argument("--model", default=None, help="Optional; only used if resubmitting")
     sp.add_argument("--poll-interval", type=float, default=30.0)
     sp.add_argument("--batch-timeout", type=float, default=None)
+    sp.add_argument(
+        "--api-key-env",
+        default=None,
+        help="Env var holding the API key the batch job was originally submitted "
+        "under (must match, or polling/collecting will fail).",
+    )
 
     # consolidate
     sp = sub.add_parser("consolidate", help="Emit the final legacy-schema results file")
@@ -215,6 +246,8 @@ def main():
             batch_wait=args.batch_wait,
             poll_interval=args.poll_interval,
             batch_timeout=args.batch_timeout,
+            condition=args.condition,
+            api_key=_resolve_api_key(args),
         )
     elif args.command == "respond":
         stages.run_respond(args.input, args.output, args.concurrency)
@@ -232,6 +265,7 @@ def main():
             batch_wait=args.batch_wait,
             poll_interval=args.poll_interval,
             batch_timeout=args.batch_timeout,
+            api_key=_resolve_api_key(args),
         )
     elif args.command == "batch-collect":
         runner = stages.run_translate if args.stage == "translate" else stages.run_judge
@@ -245,6 +279,7 @@ def main():
             batch_wait=True,
             poll_interval=args.poll_interval,
             batch_timeout=args.batch_timeout,
+            api_key=_resolve_api_key(args),
         )
     elif args.command == "consolidate":
         stages.run_consolidate(args.input, args.output)
