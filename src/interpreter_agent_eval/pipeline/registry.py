@@ -59,14 +59,20 @@ def build_interpreter_provider(
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY not set in environment")
+        extra = {}
+        if thinking_level != "none":
+            extra["extra_body"] = {"reasoning": {"effort": thinking_level}}
         return OpenRouterProvider(
-            api_key=api_key, model_name=model_name, app_name="mt-eval"
+            api_key=api_key, model_name=model_name, app_name="mt-eval", **extra
         )
     elif provider_type == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY not set in environment")
-        return OpenAIProvider(api_key=api_key, model_name=model_name)
+        extra = {}
+        if thinking_level != "none":
+            extra["reasoning_effort"] = thinking_level
+        return OpenAIProvider(api_key=api_key, model_name=model_name, **extra)
     raise ValueError(
         f"Unknown interpreter provider '{provider_type}'. Choose from: gemini, openrouter, openai"
     )
