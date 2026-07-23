@@ -73,7 +73,7 @@ from interpreter_agent_eval import User, InterpreterAgent, EvaluationFramework
 from interpreter_agent_eval.providers import GoogleAIProvider
 
 # 1. Setup Provider
-provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3-flash-preview")
+provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3.1-flash-lite-preview")
 
 # 2. Setup Users (using ISO 639-3 codes)
 user1 = User("Alice", "eng", is_llm=False)
@@ -91,7 +91,7 @@ framework = EvaluationFramework(user1, user2, interpreter)
 conversation = framework.run_conversation(messages=["I'd like to book a room."])
 
 # 5. Evaluate with a Judge
-judge_provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3-pro-preview")
+judge_provider = GoogleAIProvider(api_key=os.getenv("GEMINI_API_KEY"), model_name="gemini-3.1-pro-preview")
 evaluation = framework.evaluate_with_judge(
     judge_llm_provider=judge_provider,
     verification_prompt="1. Did the interpreter mention booking a room?\n2. Is the translation in Indonesian?"
@@ -103,14 +103,33 @@ print(f"Completion Rate: {evaluation.get_completion_rate()}")
 
 ```
 ├── data/           # Evaluation datasets (CSV/JSONL)
-├── scripts/        # Execution scripts for simulation and analysis
+├── scripts/        # Execution scripts for simulation and analysis (git-tracked)
 ├── src/            # Core framework source code
 │   ├── models/     # Pydantic models for structured output
 │   ├── providers/  # LLM provider implementations
 │   └── utils/      # Language detection and data handling
 ├── tests/          # Unit tests
+├── docs/           # Design & methodology docs (see docs/README.md) — annotation plan,
+│                   # MT-metric comparison study, model-selection rationale
+├── research/       # Analysis/research scripts (gitignored, manually synced — see research/README.md)
+├── outputs/        # Run outputs; outputs/analysis/<topic>/ holds the curated,
+│                   # paper-ready reports + figures (gitignored — see outputs/analysis/README.md)
 └── pyproject.toml  # Dependencies & metadata
 ```
+
+## Research Artifacts
+
+This repo backs an evaluation-methodology paper (communicative-goal checklist evaluation for
+interpreter-mediated MT). Beyond the library above:
+
+- **[`docs/`](docs/)** — design docs for the human annotation round, the MT-metric comparison
+  study (proving the checklist framework measures what BLEU/COMET/GEMBA miss), and the
+  10-model interpreter roster. Start at [`docs/README.md`](docs/README.md).
+- **[`outputs/analysis/`](outputs/analysis/)** — curated, by-topic analysis reports and figures
+  (core eval, judge reliability/comparison/validation, MT-metric comparison, Evalet function
+  clustering, prompt ablation). See [`outputs/analysis/README.md`](outputs/analysis/README.md).
+- **`research/`** — the analysis scripts that produce the above (gitignored; synced manually
+  like `data/` and `outputs/`, not via git).
 
 ## Citation
 
