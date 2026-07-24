@@ -13,12 +13,36 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from interpreter_agent_eval.interpreter import InterpreterAgent
 from interpreter_agent_eval.user import User
 from interpreter_agent_eval.models import JudgeEvaluation, LanguageCheckResult
-from interpreter_agent_eval.prompts.templates import JUDGE_EVALUATION_PROMPT
+from interpreter_agent_eval.prompts.templates import (
+    JUDGE_EVALUATION_PROMPT,
+    DIRECT_TRANSLATION_BRIEF,
+    DIRECT_TRANSLATION_BRIEF_WITH_CONTEXT,
+    SPECIFICATION_AWARE_TRANSLATION_BRIEF,
+)
 from interpreter_agent_eval.utils.language_verification import (
     verify_language_with_glotlid,
 )
 
 from .io import record_id
+
+# Prompt-setup ablation: alternate translation briefs, keyed by --condition.
+# "cultural_context" (default) is unchanged production behavior (InterpreterAgent's
+# own DEFAULT_TRANSLATION_BRIEF, built from source/target language + context).
+_ABLATION_BRIEFS = {
+    "direct_no_context": DIRECT_TRANSLATION_BRIEF,
+    "direct_context": DIRECT_TRANSLATION_BRIEF_WITH_CONTEXT,
+    "spec_aware": SPECIFICATION_AWARE_TRANSLATION_BRIEF,
+}
+
+
+def _lang_name(code: str) -> str:
+    from iso639 import Lang
+
+    try:
+        lang = Lang(code)
+        return f"{lang.name} ({lang.pt3})"
+    except Exception:
+        return code
 
 
 # ---------------------------------------------------------------------------
@@ -58,21 +82,39 @@ def to_work_unit(
 # ---------------------------------------------------------------------------
 def build_translate_request(
     record: Dict[str, Any],
+    condition: str = "cultural_context",
 ) -> Tuple[Optional[str], Optional[str]]:
     """Return ``(system_prompt, user_prompt)`` for translating this record.
 
     Returns ``(None, None)`` when language codes are missing (caller skips).
     Builds the identical prompt the synchronous interpreter uses.
+
+    ``condition`` selects the translation-brief ablation (prompt-setup study):
+    "cultural_context" (default) is unchanged production behavior; the other
+    values swap in an alternate brief (see ``_ABLATION_BRIEFS``) while reusing
+    the same TRANSLATION_TASK user-turn — only the system-level instructional
+    framing is manipulated, isolating the variable this ablation is testing.
     """
     source_lang = record.get("source_lang")
     target_lang = record.get("target_lang")
     if not source_lang or not target_lang:
         return None, None
+
+    translation_brief = None
+    if condition != "cultural_context":
+        brief_template = _ABLATION_BRIEFS[condition]
+        translation_brief = brief_template.format(
+            user_a_language=_lang_name(source_lang),
+            user_b_language=_lang_name(target_lang),
+            conversation_context=record.get("conversation_context"),
+        )
+
     # Provider is unused for prompt construction; pass None.
     interpreter = InterpreterAgent(
         llm_provider=None,
         source_language=source_lang,
         target_language=target_lang,
+        translation_brief=translation_brief,
         conversation_context=record.get("conversation_context"),
         name="AI Interpreter",
     )
@@ -158,10 +200,11 @@ def translate_record(
     record: Dict[str, Any],
     interpreter_provider: Any,
     interpreter_label: str,
+    condition: str = "cultural_context",
 ) -> Dict[str, Any]:
     out = dict(record)
     out["interpreter"] = interpreter_label
-    system_prompt, user_prompt = build_translate_request(record)
+    system_prompt, user_prompt = build_translate_request(record, condition)
     if user_prompt is None:
         out["translated_text"] = None
         out["translate_error"] = "missing source/target language code"

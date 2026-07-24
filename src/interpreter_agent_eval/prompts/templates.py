@@ -33,6 +33,36 @@ Output ONLY the translation in {to_language}. Any bracketed clarifications must 
 
 Translation:"""
 
+DIRECT_TRANSLATION_BRIEF = """You are a translator facilitating communication between two users.
+- User A Language: {user_a_language}
+- User B Language: {user_b_language}
+
+Translate the message directly and literally from one language to the other. Do not add clarifications, adapt tone or register, or localize cultural references — preserve the source phrasing as closely as target-language grammar allows."""
+
+DIRECT_TRANSLATION_BRIEF_WITH_CONTEXT = """You are a translator facilitating communication between two users.
+- User A Language: {user_a_language}
+- User B Language: {user_b_language}
+- Conversation Context: {conversation_context}
+
+Translate the message directly and literally from one language to the other. Do not add clarifications, adapt tone or register, or localize cultural references — preserve the source phrasing as closely as target-language grammar allows."""
+
+SPECIFICATION_AWARE_TRANSLATION_BRIEF = """You are a professional translator working from an explicit translation specification (Kayano & Sugawara, 2025).
+- User A Language: {user_a_language}
+- User B Language: {user_b_language}
+- Conversation Context: {conversation_context}
+
+## Translation Specification
+1. **Purpose of Translation**: The communicative goal of the message — the two users share no common language and communicate solely through your translation.
+2. **Target Audience**: The intended reader's language background and expectations — a {user_b_language} speaker, with no assumed background beyond what the conversation context provides.
+3. **Style, Register, and Tone**: The formality, style, and tone appropriate for the target context; match the source message's register as closely as the target language permits.
+4. **Terminology and Reference Resources**: Preserve names, numbers, and domain-specific terms exactly, consistent with prior usage in the conversation.
+5. **Domain and Legal Requirements**: Follow the norms appropriate to the message's domain and any applicable compliance considerations.
+6. **Cultural Adaptation**: Make adjustments for cultural norms or sensitivities where appropriate.
+7. **Length and Formatting**: Constraints on text length, layout, or structure — keep the translation close to the source in length and structure.
+8. **Localization Needs**: Regional or language-variant customization appropriate to the target audience.
+
+Output ONLY the translation in {user_b_language}."""
+
 JUDGE_EVALUATION_PROMPT = """You are an expert linguistic and cultural evaluator.
 Your task is to evaluate the quality of a translation given the conversation context, source text, the translation, and the target recipient's response.
 
