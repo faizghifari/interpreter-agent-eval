@@ -1,8 +1,26 @@
 """Google AI Studio provider implementation."""
 
 import threading
-from typing import Optional
+from typing import Dict, Optional, Tuple
 from .base import LLMProvider
+
+# Real token-usage accumulator for cost measurement (e.g. the multi-turn
+# checklist-standardization pilot). Keyed by (model_name, kind), kind one of
+# "prompt_tokens" | "candidates_tokens" | "thoughts_tokens". Thread-safe since
+# GoogleAIProvider.generate() is called concurrently from thread pools in
+# several pipeline stages.
+_usage_lock = threading.Lock()
+_usage_totals: Dict[Tuple[str, str], int] = {}
+
+
+def reset_usage_totals() -> None:
+    with _usage_lock:
+        _usage_totals.clear()
+
+
+def get_usage_totals() -> Dict[Tuple[str, str], int]:
+    with _usage_lock:
+        return dict(_usage_totals)
 
 
 class GoogleAIProvider(LLMProvider):
@@ -140,9 +158,27 @@ class GoogleAIProvider(LLMProvider):
             response = self._client.models.generate_content(
                 model=self.model_name, contents=prompt, config=config
             )
-            return response.text
         except Exception as e:
             raise RuntimeError(f"Google AI generation failed: {str(e)}")
+
+        try:
+            usage = getattr(response, "usage_metadata", None)
+            if usage is not None:
+                with _usage_lock:
+                    key = self.model_name
+                    _usage_totals[(key, "prompt_tokens")] = _usage_totals.get(
+                        (key, "prompt_tokens"), 0
+                    ) + (getattr(usage, "prompt_token_count", None) or 0)
+                    _usage_totals[(key, "candidates_tokens")] = _usage_totals.get(
+                        (key, "candidates_tokens"), 0
+                    ) + (getattr(usage, "candidates_token_count", None) or 0)
+                    _usage_totals[(key, "thoughts_tokens")] = _usage_totals.get(
+                        (key, "thoughts_tokens"), 0
+                    ) + (getattr(usage, "thoughts_token_count", None) or 0)
+        except Exception:  # noqa: BLE001 — instrumentation must never break generate()'s str contract
+            pass
+
+        return response.text
 
     def get_provider_name(self) -> str:
         """Get provider name."""

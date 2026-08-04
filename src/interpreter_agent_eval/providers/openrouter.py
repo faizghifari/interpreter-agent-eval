@@ -4,6 +4,22 @@ from typing import Optional
 from .base import LLMProvider
 
 
+def _strip_think_block(text: Optional[str]) -> Optional[str]:
+    """Strip a leaked ``<think>...</think>`` reasoning block from ``text``.
+
+    Some OpenRouter upstreams (observed on qwen3.5-flash) inline the model's
+    chain-of-thought as literal ``<think>`` tags in ``message.content`` instead
+    of a separate reasoning channel, even with ``reasoning.effort`` set low.
+    Only strips when the block is closed — an unclosed ``<think>`` means the
+    response was cut off before any real answer, and returning that unchanged
+    lets existing downstream checks (mojibake/language verification) catch it
+    as a failure rather than silently returning an empty string.
+    """
+    if text and "</think>" in text:
+        return text.split("</think>")[-1].strip()
+    return text
+
+
 class OpenRouterProvider(LLMProvider):
     """OpenRouter API provider for accessing various models."""
 
@@ -96,7 +112,7 @@ class OpenRouterProvider(LLMProvider):
                 extra_headers=extra_headers if extra_headers else None,
                 **params,
             )
-            return response.choices[0].message.content
+            return _strip_think_block(response.choices[0].message.content)
         except Exception as e:
             raise RuntimeError(f"OpenRouter generation failed: {str(e)}")
 

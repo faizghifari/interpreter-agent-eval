@@ -222,5 +222,6 @@ docs/
 # poster-related stuff
 poster/
 scripts/poster/
+scripts/paper/
 poster_export/
 scripts/export_poster_pptx.py
