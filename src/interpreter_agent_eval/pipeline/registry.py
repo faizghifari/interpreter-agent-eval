@@ -147,9 +147,10 @@ def create_ar_model_provider() -> OpenAIProvider:
 
 
 def create_bn_model_provider() -> OpenAIProvider:
+    # TigerLLM-9B-Instruct — Bengali.
     return OpenAIProvider(
         api_key="lm-studio",
-        model_name=os.getenv("LM_STUDIO_BN_MODEL", "bengali-llm-placeholder"),
+        model_name=os.getenv("LM_STUDIO_BN_MODEL", "tigerllm-9b-it"),
         base_url=_lm_studio_base_url(),
     )
 
