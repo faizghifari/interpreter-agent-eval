@@ -1,5 +1,5 @@
 """
-Shared scoring primitives for OpenSubtitles subtitle-pair filtering.
+Shared safety and scoring primitives for OpenSubtitles subtitle-pair filtering.
 
 Language-specific content (marker sets, script ratio functions, LanguageFeatures
 instances, LANG_REGISTRY, CROSS_FEATURES) lives in _lang_features.py.  To add a
@@ -7,7 +7,7 @@ new language, edit that file only — no changes are needed here.
 
 Public API
 ----------
-step1_filter(row)           → (pass: bool, reason: str, metrics: dict)
+step1_filter(row)           → hard content-safety/quality gate plus metrics
 step2_score(row, metrics)   → (quality, src_complexity, tgt_complexity,
                                alignment_risk, worthiness, reasons)
 compute_pair_similarities(model, rows, batch_size, max_chars, log_prefix) → List[float]
@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
+from _content_safety import classify_texts
 from _lang_features import get_cross_features, get_lang_features
 
 # ── Tunable weights ──────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ def has_middle_turn_marker(text: str) -> bool:
     return False
 
 
-# ── Step 1: hard quality filter ──────────────────────────────────────────────
+# ── Step 1: hard content-safety and quality filter ──────────────────────────
 
 
 def step1_filter(row: Dict[str, str]) -> Tuple[bool, str, Dict[str, float]]:
@@ -135,6 +136,10 @@ def step1_filter(row: Dict[str, str]) -> Tuple[bool, str, Dict[str, float]]:
 
     if not source_text or not target_text:
         return False, "empty_text", {}
+
+    safety = classify_texts((source_text, target_text))
+    if safety.blocked:
+        return False, safety.reason, {}
 
     src_lang = (row.get("source_lang") or "").lower()
     tgt_lang = (row.get("target_lang") or "").lower()
