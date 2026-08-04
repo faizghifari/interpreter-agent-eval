@@ -1,7 +1,21 @@
 """OpenAI provider implementation."""
 
+import re
 from typing import Optional
 from .base import LLMProvider
+
+# Chat-template control tokens that some OpenAI-compatible local backends (e.g. LM
+# Studio) fail to register as a model's actual stop token, so they leak into
+# `message.content` verbatim instead of being stripped server-side. Observed in
+# practice: 100% of Arabic user-simulation responses (c4ai-command-r7b-arabic-02-2025
+# via LM Studio) ended with a literal "<|END_RESPONSE|>" string.
+_LEAKED_STOP_TOKEN_RE = re.compile(
+    r"<\|.*?\|>|\[END[_ ]?RESPONSE\]|<end_of_turn>|<\|im_end\|>|\[/?INST\]|<<SYS>>"
+)
+
+
+def _strip_leaked_stop_tokens(text: str) -> str:
+    return _LEAKED_STOP_TOKEN_RE.sub("", text).strip()
 
 
 class OpenAIProvider(LLMProvider):
@@ -79,7 +93,7 @@ class OpenAIProvider(LLMProvider):
             response = self._client.chat.completions.create(
                 model=self.model_name, messages=messages, **params
             )
-            return response.choices[0].message.content
+            return _strip_leaked_stop_tokens(response.choices[0].message.content)
         except Exception as e:
             raise RuntimeError(f"OpenAI generation failed: {str(e)}")
 
