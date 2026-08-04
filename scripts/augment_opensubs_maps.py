@@ -2,14 +2,19 @@ import argparse
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research" / "consistency"))
+from consolidate_consistency_runs import consolidate_group, DEDUP_THRESHOLD  # noqa: E402
 
 
 LANGS: Dict[str, Dict[str, str]] = {
@@ -1055,22 +1060,12 @@ def _repair_generated_sample(
     l2 = _dedupe_keep_order(_as_string_list(checklist.get("layer_2_pragmatic_function")))
     l3 = _dedupe_keep_order(_as_string_list(checklist.get("layer_3_cultural_social_constraints")))
 
-    if len(l1) > 2:
-        l2.extend(l1[2:])
-        l1 = l1[:2]
-
     if not l1:
         l1 = ["Does the translation preserve the core factual meaning of the source utterance?"]
-    if len(l2) < 2:
-        l2.extend([
-            "Does the translation preserve the speaker's communicative intent?",
-            "Does the translation preserve interpersonal stance and implied intent in context?",
-        ])
-    if len(l3) < 2:
-        l3.extend([
-            "Does the translation preserve required register, politeness, and social stance?",
-            "Does the translation bridge non-literal constraints required for natural understanding?",
-        ])
+    if not l2:
+        l2.append("Does the translation preserve the speaker's communicative intent?")
+    if not l3:
+        l3.append("Does the translation preserve required register, politeness, and social stance?")
 
     if not _checklist_has_keyword(l2, ["context", "preced", "follow", "coher", "turn", "dialogue flow"]):
         l2.append(
@@ -1178,10 +1173,10 @@ def _validate_generated_sample(
 
     if l1 < 1:
         errors.append("layer_1_semantic_core must have at least 1 item")
-    if l2 < 2:
-        errors.append("layer_2_pragmatic_function must have at least 2 items")
-    if l3 < 2:
-        errors.append("layer_3_cultural_social_constraints must have at least 2 items")
+    if l2 < 1:
+        errors.append("layer_2_pragmatic_function must have at least 1 item")
+    if l3 < 1:
+        errors.append("layer_3_cultural_social_constraints must have at least 1 item")
     if not (l3 >= l2 >= l1):
         errors.append("checklist count priority must satisfy layer_3 >= layer_2 >= layer_1")
 
@@ -1310,6 +1305,39 @@ def _load_existing_keys_with_runs(path: Path) -> Set[Tuple[str, str, str, int]]:
     return keys
 
 
+def _consolidate_multirun_output(
+    output_jsonl: Path,
+    dedup_threshold: float,
+    consolidated_output: Path,
+) -> int:
+    """Group the multi-run raw records by (segment_id, direction) and merge each
+    group into one canonical record via consolidate_consistency_runs.consolidate_group()
+    (exact-dedup + LaBSE semantic dedup of checklist items). Always invoked automatically
+    after a multi-run (self-consistency) augmentation pass so dedup can't be silently
+    skipped by forgetting to run consolidate_consistency_runs.py separately."""
+    records = _read_jsonl(output_jsonl)
+    groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]] = defaultdict(list)
+    for r in records:
+        groups[(r.get("segment_id", ""), r.get("direction", ""))].append(r)
+
+    incomplete = [(k, len(v)) for k, v in groups.items() if len(v) < 2]
+    if incomplete:
+        print(
+            f"warning: {len(incomplete)} group(s) with <2 consistency runs "
+            f"(consolidating anyway, dedup within a single run only)",
+            flush=True,
+        )
+
+    merged = [consolidate_group(runs, dedup_threshold) for runs in groups.values()]
+    merged.sort(key=lambda r: (str(r.get("segment_id", "")), r.get("direction", "")))
+
+    consolidated_output.parent.mkdir(parents=True, exist_ok=True)
+    with consolidated_output.open("w", encoding="utf-8") as f:
+        for r in merged:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return len(merged)
+
+
 def run_augmentation(
     input_jsonl: Path,
     output_jsonl: Path,
@@ -1331,6 +1359,9 @@ def run_augmentation(
     consistency_temps: Optional[List[float]] = None,
     concurrency: int = 8,
     base_seed: Optional[int] = None,
+    consolidate: bool = True,
+    dedup_threshold: float = DEDUP_THRESHOLD,
+    consolidated_output: Optional[Path] = None,
 ) -> None:
     if lang_pair not in PAIR_LANGS:
         raise ValueError(f"Unknown lang_pair '{lang_pair}'. Known: {sorted(PAIR_LANGS)}")
@@ -1533,6 +1564,27 @@ def run_augmentation(
     print(f"failed_rows={stats['failed']}", flush=True)
     print(f"output={output_jsonl}", flush=True)
 
+    # Finalized checklist-gen setup: dedup is ALWAYS applied, not just when
+    # --consistency-runs > 1 — a single run still gets semantic-deduped
+    # (strips any within-run near-duplicate criteria the model itself wrote).
+    if consolidate:
+        out_path = consolidated_output or (output_jsonl.parent / "consolidated.jsonl")
+        n_consolidated = _consolidate_multirun_output(
+            output_jsonl=output_jsonl,
+            dedup_threshold=dedup_threshold,
+            consolidated_output=out_path,
+        )
+        print(
+            f"consolidated={n_consolidated} (threshold={dedup_threshold}) -> {out_path}",
+            flush=True,
+        )
+    else:
+        print(
+            "warning: --no-consolidate set; raw output was NOT deduplicated "
+            "(checklist may contain near-duplicate criteria)",
+            flush=True,
+        )
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -1577,6 +1629,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None, metavar="N",
                         help="Base seed for Gemini generationConfig. Run k uses seed+k-1, "
                              "ensuring independent samples across consistency runs. Best-effort.")
+    parser.add_argument("--no-consolidate", action="store_true",
+                        help="Skip automatic consolidation/dedup entirely (finalized setup: dedup "
+                             "always runs, even for --consistency-runs 1, to strip within-run "
+                             "near-duplicates). Only use for debugging raw per-run output.")
+    parser.add_argument("--dedup-threshold", type=float, default=DEDUP_THRESHOLD, metavar="T",
+                        help=f"LaBSE cosine similarity threshold for semantic dedup during "
+                             f"consolidation (default: {DEDUP_THRESHOLD}). Applied regardless of "
+                             f"--consistency-runs.")
+    parser.add_argument("--consolidated-output", type=Path, default=None, metavar="PATH",
+                        help="Path for the consolidated (deduped) output. "
+                             "Default: consolidated.jsonl next to --output.")
     return parser.parse_args()
 
 
@@ -1603,6 +1666,9 @@ def main() -> None:
         consistency_temps=args.consistency_temps,
         concurrency=args.concurrency,
         base_seed=args.seed,
+        consolidate=not args.no_consolidate,
+        dedup_threshold=args.dedup_threshold,
+        consolidated_output=args.consolidated_output,
     )
 
 
