@@ -179,6 +179,15 @@ class GeminiBatchClient(BatchClient):
         if http_options:
             kwargs["http_options"] = http_options
         self.client = genai.Client(**kwargs)
+        # Step 4b (docs/multiturn_gap_diagnosis.md §4b, D1 screening pilot):
+        # batch token usage was previously discarded entirely. Accumulated
+        # here (not returned from collect(), to keep that method's
+        # {custom_id: text} contract unchanged for existing callers) and
+        # readable via get_usage_totals() / usage_by_custom_id after collect().
+        self.usage_totals: Dict[str, int] = {
+            "prompt_tokens": 0, "candidates_tokens": 0, "thoughts_tokens": 0,
+        }
+        self.usage_by_custom_id: Dict[str, Dict[str, int]] = {}
 
     def _inlined(self, req: BatchRequest, model: str):
         from google.genai import types
@@ -195,6 +204,16 @@ class GeminiBatchClient(BatchClient):
             cfg_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_level=tlevel, include_thoughts=True
             )
+        # Step 4a (docs/multiturn_gap_diagnosis.md §4b): structured output was
+        # silently dropped on the batch path — config["json"]/["response_schema"]
+        # were set by callers (e.g. checklist_gen.py's batch builders) but never
+        # read here, unlike OpenAIBatchClient._body and the sync path
+        # (GoogleAIProvider.generate). Honour both now.
+        if req.config.get("json"):
+            cfg_kwargs["response_mime_type"] = "application/json"
+            schema = req.config.get("response_schema")
+            if schema is not None:
+                cfg_kwargs["response_schema"] = schema
         config = types.GenerateContentConfig(**cfg_kwargs) if cfg_kwargs else None
         return types.InlinedRequest(
             model=model,
@@ -241,7 +260,28 @@ class GeminiBatchClient(BatchClient):
                 text = None
             if cid is not None:
                 out[cid] = text
+                # Step 4b: capture usage_metadata alongside text (mirrors
+                # research/mt_compare/batch2_common.py's collect()).
+                p = c = t = 0
+                try:
+                    u = getattr(resp.response, "usage_metadata", None)
+                    if u is not None:
+                        p = getattr(u, "prompt_token_count", 0) or 0
+                        c = getattr(u, "candidates_token_count", 0) or 0
+                        t = getattr(u, "thoughts_token_count", 0) or 0
+                except Exception:  # noqa: BLE001
+                    pass
+                self.usage_by_custom_id[cid] = {
+                    "prompt_tokens": p, "candidates_tokens": c, "thoughts_tokens": t,
+                }
+                self.usage_totals["prompt_tokens"] += p
+                self.usage_totals["candidates_tokens"] += c
+                self.usage_totals["thoughts_tokens"] += t
         return out
+
+    def get_usage_totals(self) -> Dict[str, int]:
+        """Accumulated token usage across every collect() call on this client."""
+        return dict(self.usage_totals)
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +316,23 @@ class FakeBatchClient(BatchClient):
         return {
             r.custom_id: self._responder(r) for r in self._jobs.get(job_id, requests)
         }
+
+
+def write_usage_totals(clients: List["GeminiBatchClient"], path: str, label: str = "") -> Dict[str, Any]:
+    """Merge usage across sharded GeminiBatchClients (one per API key) and
+    write ``usage_totals.json`` (Step 4b). Returns the merged dict."""
+    merged_totals: Dict[str, int] = {"prompt_tokens": 0, "candidates_tokens": 0, "thoughts_tokens": 0}
+    merged_by_cid: Dict[str, Dict[str, int]] = {}
+    for client in clients:
+        for key, val in client.get_usage_totals().items():
+            merged_totals[key] = merged_totals.get(key, 0) + val
+        merged_by_cid.update(client.usage_by_custom_id)
+    payload = {"label": label, "totals": merged_totals, "n_responses": len(merged_by_cid), "by_custom_id": merged_by_cid}
+    import os as _os
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    return payload
 
 
 def build_batch_client(provider_type: str, **kwargs) -> BatchClient:
