@@ -3,12 +3,12 @@ OpenSubtitles id-ko scoring pipeline.
 
 Usage
 -----
-  python score_opensubs_segments.py preview  --input <file.tsv>   [opts]
-  python score_opensubs_segments.py bulk     --input-dir <dir>    [opts]
-  python score_opensubs_segments.py refilter --input <scored.tsv> [opts]
+  python opensubs_pipeline.py preview  --input <file.tsv>   [opts]
+  python opensubs_pipeline.py bulk     --input-dir <dir>    [opts]
+  python opensubs_pipeline.py refilter --input <scored.tsv> [opts]
 
-preview   — score a single segment file, write TSV + markdown report
-bulk      — score a directory of segment files, write per-file TSVs + merged output
+preview   — safety-filter and score one segment file, then write TSV + markdown report
+bulk      — safety-filter and score segment files, then write per-file TSVs + merged output
 refilter  — apply LaBSE similarity filter to an already-scored TSV
 """
 
@@ -33,6 +33,7 @@ from _opensubs_scoring import (
     step1_filter,
     step2_score,
 )
+from _content_safety import classify_texts, classify_value
 
 
 # ── Shared: embedding calibration ────────────────────────────────────────────
@@ -464,8 +465,14 @@ def run_filter(args: argparse.Namespace) -> None:
         # Worthiness thresholds are applied after this so that --top-k-pct can
         # compute its cutoff from the full per-file score distribution.
         raw_rows: List[Dict] = []
+        content_safety_dropped = 0
         with scored_file.open("r", encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f, delimiter="\t"):
+                if classify_texts(
+                    (row.get("source_text") or "", row.get("target_text") or "")
+                ).blocked:
+                    content_safety_dropped += 1
+                    continue
                 risk = float(row.get("alignment_risk") or 0)
                 if risk > args.max_alignment_risk:
                     continue
@@ -600,6 +607,7 @@ def run_filter(args: argparse.Namespace) -> None:
 
         print(
             f"[{i}/{len(scored_files)}] {file_stem} | "
+            f"content_safety_dropped={content_safety_dropped} | "
             f"candidates={len(candidates)} | kept(sim)={len(kept)} | saved={len(selected)} | cumulative={cumulative_kept}",
             flush=True,
         )
@@ -927,7 +935,19 @@ def run_refilter(args: argparse.Namespace) -> None:
     print(f"Loading candidates: {input_path}", flush=True)
     with input_path.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
-    print(f"Candidate rows: {len(rows)}", flush=True)
+    total_rows = len(rows)
+    rows = [
+        row
+        for row in rows
+        if not classify_texts(
+            (row.get("source_text") or "", row.get("target_text") or "")
+        ).blocked
+    ]
+    content_safety_dropped = total_rows - len(rows)
+    print(
+        f"Candidate rows: {total_rows} | content_safety_dropped={content_safety_dropped}",
+        flush=True,
+    )
 
     from sentence_transformers import SentenceTransformer
     print(f"Loading embedding model: {args.embedding_model}", flush=True)
@@ -1038,6 +1058,7 @@ def run_windows(args: argparse.Namespace) -> None:
 
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
     matched: set = set()
+    content_safety_dropped = 0
 
     with output_jsonl.open("w", encoding="utf-8") as out_f:
         for seg_file in segment_files:
@@ -1076,7 +1097,7 @@ def run_windows(args: argparse.Namespace) -> None:
                     prev_rows = _context_slice(seg_rows, max(0, match_pos - args.n_prev), match_pos)
                     after_rows = _context_slice(seg_rows, match_pos + 1, min(len(seg_rows), match_pos + args.n_after + 1))
 
-                    out_f.write(json.dumps({
+                    record = {
                         "segment_file": seg_file.name,
                         "segment_id": sid,
                         "direction": fr.get("direction") or "both",
@@ -1096,12 +1117,18 @@ def run_windows(args: argparse.Namespace) -> None:
                         "n_after": args.n_after,
                         "prev_context": prev_rows,
                         "after_context": after_rows,
-                    }, ensure_ascii=False) + "\n")
+                    }
+                    if classify_value(record).blocked:
+                        content_safety_dropped += 1
+                        matched.add(fi)
+                        continue
+                    out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                     matched.add(fi)
 
     print(f"input_rows={len(final_rows)}", flush=True)
     print(f"matched_rows={len(matched)}", flush=True)
     print(f"unmatched_rows={len(final_rows) - len(matched)}", flush=True)
+    print(f"content_safety_dropped={content_safety_dropped}", flush=True)
     print(f"output={output_jsonl}", flush=True)
 
 
@@ -1111,7 +1138,7 @@ def run_scene_filter(args: argparse.Namespace) -> None:
     output_jsonl = args.output.resolve()
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
 
-    total = kept = dropped = 0
+    total = kept = dropped = content_safety_dropped = 0
 
     with input_jsonl.open("r", encoding="utf-8") as in_f, \
          output_jsonl.open("w", encoding="utf-8") as out_f:
@@ -1121,6 +1148,10 @@ def run_scene_filter(args: argparse.Namespace) -> None:
                 continue
             total += 1
             rec = json.loads(line)
+
+            if classify_value(rec).blocked:
+                content_safety_dropped += 1
+                continue
 
             target_film = rec.get("film_key") or ""
 
@@ -1154,6 +1185,7 @@ def run_scene_filter(args: argparse.Namespace) -> None:
     print(f"total={total}", flush=True)
     print(f"kept={kept}", flush=True)
     print(f"dropped_no_same_film_prev={dropped}", flush=True)
+    print(f"content_safety_dropped={content_safety_dropped}", flush=True)
     print(f"output={output_jsonl}", flush=True)
 
 

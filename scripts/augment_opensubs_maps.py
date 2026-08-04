@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from _content_safety import classify_value
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research" / "consistency"))
 from consolidate_consistency_runs import consolidate_group, DEDUP_THRESHOLD  # noqa: E402
 
@@ -1316,6 +1318,14 @@ def _consolidate_multirun_output(
     after a multi-run (self-consistency) augmentation pass so dedup can't be silently
     skipped by forgetting to run consolidate_consistency_runs.py separately."""
     records = _read_jsonl(output_jsonl)
+    safe_records = [record for record in records if not classify_value(record).blocked]
+    content_safety_dropped = len(records) - len(safe_records)
+    if content_safety_dropped:
+        print(
+            f"content_safety_dropped_during_consolidation={content_safety_dropped}",
+            flush=True,
+        )
+    records = safe_records
     groups: Dict[Tuple[Any, Any], List[Dict[str, Any]]] = defaultdict(list)
     for r in records:
         groups[(r.get("segment_id", ""), r.get("direction", ""))].append(r)
@@ -1393,8 +1403,16 @@ def run_augmentation(
         rows = rows[start_index:]
     if max_rows > 0:
         rows = rows[:max_rows]
+    input_rows_before_safety = len(rows)
+    rows = [row for row in rows if not classify_value(row).blocked]
+    input_content_safety_dropped = input_rows_before_safety - len(rows)
+    if input_content_safety_dropped:
+        print(
+            f"input_content_safety_dropped={input_content_safety_dropped}",
+            flush=True,
+        )
     if not rows:
-        raise RuntimeError("No rows to process after applying start/max limits.")
+        raise RuntimeError("No safe rows to process after applying start/max limits.")
 
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1492,6 +1510,9 @@ def run_augmentation(
                 ]
                 if hard_failures:
                     raise ValueError("; ".join(hard_failures))
+                safety = classify_value(generated)
+                if safety.blocked:
+                    raise ValueError(safety.reason)
                 break
             except Exception as exc:
                 if attempt >= max_retries:
@@ -1519,7 +1540,7 @@ def run_augmentation(
         if sleep_s > 0:
             time.sleep(sleep_s)
 
-        return _build_output_record(
+        record = _build_output_record(
             row=row,
             generated=generated,
             src_code=src_code,
@@ -1530,6 +1551,15 @@ def run_augmentation(
             consistency_run_id=run_idx if multi_run else 0,
             consistency_temperature=run_temp if multi_run else 0.0,
         )
+        safety = classify_value(record)
+        if safety.blocked:
+            print(
+                f"blocked generated row={row_idx} dir={direction_label} run={run_idx}: "
+                f"{safety.reason}",
+                flush=True,
+            )
+            return None
+        return record
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         future_to_task = {executor.submit(_execute_task, t): t for t in all_tasks}
