@@ -13,7 +13,7 @@
 set -euo pipefail
 
 ROOT="/mnt/d/dev/mt-eval/interpreter-agent-eval"
-PYTHON="${UV:-/home/haznitrama/.local/bin/uv} run python"
+PYTHON="${UV:-uv} run python"
 EVAL_SCRIPT="$ROOT/scripts/run_eval.py"
 AUG_BASE="$ROOT/outputs/opensubtitles_augmented"
 EVAL_OUT_BASE="$ROOT/outputs/opensubs_eval"

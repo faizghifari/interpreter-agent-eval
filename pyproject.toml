@@ -5,7 +5,7 @@ description = "Evaluation framework for interpreter/translator agents"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Faiz Ghifari Haznitrama" }
+    { name = "Anonymous Authors" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -41,8 +41,6 @@ dependencies = [
     "transformers>=5.1.0",
 ]
 
-[project.urls]
-Repository = "https://github.com/faizghifari/interpreter-agent-eval"
 
 [build-system]
 requires = ["hatchling"]

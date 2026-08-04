@@ -14,7 +14,7 @@
 set -euo pipefail
 
 ROOT="/mnt/d/dev/mt-eval/interpreter-agent-eval"
-PYTHON="/home/haznitrama/.local/bin/uv run python"
+PYTHON="${UV:-uv} run python"
 EVAL="$ROOT/scripts/run_eval.py"
 DATA="$ROOT/outputs/opensubs_augmented/top500"
 OUT="$ROOT/outputs/eval_consolidated"

@@ -138,9 +138,8 @@ If you use this framework in your research, please cite:
 ```bibtex
 @software{interpreter_agent_eval,
   title={Interpreter Agent Evaluation Framework},
-  author={Faiz Ghifari Haznitrama, Alice Oh},
-  year={2026},
-  url={https://github.com/faizghifari/interpreter-agent-eval}
+  author={Anonymous Authors},
+  year={2026}
 }
 ```
 
