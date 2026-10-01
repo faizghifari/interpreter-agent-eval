@@ -1,6 +1,10 @@
 # Interpreter Agent Evaluation Framework
 
+[![arXiv](https://img.shields.io/badge/arXiv-2609.19885-b31b1b.svg)](https://arxiv.org/abs/2609.19885)
+
 A comprehensive framework for evaluating LLM-powered interpreter agents that facilitate communication between users speaking different languages.
+
+This repository accompanies the paper [*Evaluating Communicative Success in Machine-Translated Conversation*](https://arxiv.org/abs/2609.19885), accepted at the RTCA workshop at NeurIPS 2026.
 
 ## Features
 
@@ -119,8 +123,9 @@ print(f"Completion Rate: {evaluation.get_completion_rate()}")
 
 ## Research Artifacts
 
-This repo backs an evaluation-methodology paper (communicative-goal checklist evaluation for
-interpreter-mediated MT). Beyond the library above:
+This repo backs the evaluation-methodology paper
+[*Evaluating Communicative Success in Machine-Translated Conversation*](https://arxiv.org/abs/2609.19885)
+(communicative-goal checklist evaluation for interpreter-mediated MT). Beyond the library above:
 
 - **[`docs/`](docs/)** — design docs for the human annotation round, the MT-metric comparison
   study (proving the checklist framework measures what BLEU/COMET/GEMBA miss), and the
