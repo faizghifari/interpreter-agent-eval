@@ -141,11 +141,14 @@ This repo backs the evaluation-methodology paper
 If you use this framework in your research, please cite:
 
 ```bibtex
-@software{interpreter_agent_eval,
-  title={Interpreter Agent Evaluation Framework},
-  author={Faiz Ghifari Haznitrama, Alice Oh},
+@misc{haznitrama2026evaluating,
+  title={Evaluating Communicative Success in Machine-Translated Conversation},
+  author={Haznitrama, Faiz Ghifari and Oh, Alice},
   year={2026},
-  url={https://github.com/faizghifari/interpreter-agent-eval}
+  eprint={2609.19885},
+  archivePrefix={arXiv},
+  primaryClass={cs.CL},
+  url={https://arxiv.org/abs/2609.19885}
 }
 ```
 
