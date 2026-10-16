@@ -6,7 +6,7 @@
 # LM_STUDIO_BN_MODEL — add "ben" to TARGET_LANGS once that is configured.
 #
 # Run from WSL:
-#   bash /mnt/d/dev/mt-eval/interpreter-agent-eval/scripts/run_eval_consolidated.sh
+#   bash ./scripts/run_eval_consolidated.sh
 #
 # Optional env overrides:
 #   NUM_SAMPLES   max records per (pair × target_lang) to evaluate (default: all)
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-ROOT="/mnt/d/dev/mt-eval/interpreter-agent-eval"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${UV:-uv} run python"
 EVAL_SCRIPT="$ROOT/scripts/run_eval.py"
 DATA_BASE="$ROOT/outputs/opensubs_augmented/top500"

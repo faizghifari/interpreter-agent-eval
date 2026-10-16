@@ -5,7 +5,7 @@
 # Within each pair, interpreter models run sequentially to avoid LM Studio overload.
 #
 # Run from WSL:
-#   bash /mnt/d/dev/mt-eval/interpreter-agent-eval/scripts/run_eval_full.sh
+#   bash ./scripts/run_eval_full.sh
 #
 # Optional env overrides:
 #   NUM_SAMPLES   max records per run (default: all)
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-ROOT="/mnt/d/dev/mt-eval/interpreter-agent-eval"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${UV:-uv} run python"
 EVAL="$ROOT/scripts/run_eval.py"
 DATA="$ROOT/outputs/opensubs_augmented/top500"

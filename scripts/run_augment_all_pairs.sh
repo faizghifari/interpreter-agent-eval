@@ -2,14 +2,15 @@
 # Augment windows JSONL into MAPS-like data for all 5 language pairs in parallel.
 # Reads from outputs/opensubtitles_windows/{pair}/windows.jsonl
 # Writes to outputs/opensubtitles_augmented/{pair}/augmented.jsonl
-# Run from WSL: bash /mnt/d/dev/mt-eval/interpreter-agent-eval/scripts/run_augment_all_pairs.sh
+# Run from WSL: bash $ROOT/scripts/run_augment_all_pairs.sh
 
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PYTHON="python3"
-SCRIPT="/mnt/d/dev/mt-eval/interpreter-agent-eval/scripts/augment_opensubs_maps.py"
-WIN_BASE="/mnt/d/dev/mt-eval/interpreter-agent-eval/outputs/opensubtitles_windows"
-OUT_BASE="/mnt/d/dev/mt-eval/interpreter-agent-eval/outputs/opensubtitles_augmented"
+SCRIPT="$ROOT/scripts/augment_opensubs_maps.py"
+WIN_BASE="$ROOT/outputs/opensubtitles_windows"
+OUT_BASE="$ROOT/outputs/opensubtitles_augmented"
 MODEL="gemini-3.1-pro-preview"
 
 augment_pair() {

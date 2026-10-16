@@ -4,7 +4,7 @@
 # Bengali (ben) target is skipped — no Bengali user model available.
 #
 # Run from WSL:
-#   bash /mnt/d/dev/mt-eval/interpreter-agent-eval/scripts/run_eval_opensubs.sh
+#   bash ./scripts/run_eval_opensubs.sh
 #
 # Optional env overrides:
 #   NUM_SAMPLES   max records per (pair × target_lang) to evaluate (default: 100)
@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-ROOT="/mnt/d/dev/mt-eval/interpreter-agent-eval"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${UV:-uv} run python"
 EVAL_SCRIPT="$ROOT/scripts/run_eval.py"
 AUG_BASE="$ROOT/outputs/opensubtitles_augmented"

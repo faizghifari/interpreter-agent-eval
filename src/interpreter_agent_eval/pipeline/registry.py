@@ -115,7 +115,7 @@ def build_judge_provider(
 # Local user-simulation providers (LM Studio) — not batchable
 # ---------------------------------------------------------------------------
 def _lm_studio_base_url() -> str:
-    return os.getenv("LM_STUDIO_BASE_URL", "http://14.50.130.58:1234/v1")
+    return os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 
 
 def create_id_model_provider() -> OpenAIProvider:
